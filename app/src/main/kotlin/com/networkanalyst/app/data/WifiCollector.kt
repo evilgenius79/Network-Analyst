@@ -178,6 +178,9 @@ class WifiCollector(context: Context, private val connectivity: ConnectivityColl
         return try {
             val connectedBssid = cleanBssid(liveInfo()?.bssid) ?: cleanBssid(connectivity.wifiInfoFromCapabilities()?.bssid)
             WifiScan(manager.scanResults.orEmpty().mapNotNull { toAccessPoint(it, connectedBssid) }, fresh = false)
+        } catch (_: SecurityException) {
+            // Permission was withdrawn between the check above and the call.
+            WifiScan(unavailableReason = ScanUnavailableReason.LOCATION_PERMISSION_MISSING)
         } catch (_: RuntimeException) {
             WifiScan(unavailableReason = ScanUnavailableReason.FAILED)
         }

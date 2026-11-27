@@ -111,7 +111,7 @@ fun SpeedScreen(
         if (state.history.isNotEmpty()) {
             item {
                 SectionCard(
-                    "Previous tests",
+                    title = "Previous tests",
                     trailing = { TextButton(onClick = actions.onClearHistory) { Text("Clear") } },
                 ) {
                     state.history.take(20).forEachIndexed { index, entry ->
@@ -189,7 +189,7 @@ private fun BigNumber(label: String, mbps: Double?, modifier: Modifier = Modifie
 
 @Composable
 private fun ResultDetails(result: SpeedTestResult) {
-    SectionCard("Details") {
+    SectionCard(title = "Details") {
         result.downloadLoadedLatencyMs?.let { DetailRow("Latency while downloading", Fmt.ms(it)) }
         result.uploadLoadedLatencyMs?.let { DetailRow("Latency while uploading", Fmt.ms(it)) }
         result.serverLocation?.let { DetailRow("Test server", it) }

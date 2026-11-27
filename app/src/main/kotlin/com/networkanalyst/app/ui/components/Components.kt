@@ -63,8 +63,8 @@ fun severityIcon(severity: Severity): ImageVector = when (severity) {
 /** A titled card that groups related content. */
 @Composable
 fun SectionCard(
-    title: String? = null,
     modifier: Modifier = Modifier,
+    title: String? = null,
     trailing: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {

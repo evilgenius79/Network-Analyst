@@ -174,7 +174,7 @@ private fun LinkCard(link: WifiLink, history: List<Int>) {
     val colors = LocalStatusColors.current
     val rssi = history.lastOrNull() ?: link.rssiDbm
     val channel = WifiChannels.channelOf(link.frequencyMhz)
-    SectionCard(link.ssid ?: "Connected Wi-Fi") {
+    SectionCard(title = link.ssid ?: "Connected Wi-Fi") {
         Row(verticalAlignment = Alignment.Bottom) {
             Text("$rssi", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold, color = signalColor(rssi, colors))
             Spacer(Modifier.width(6.dp))
@@ -220,7 +220,7 @@ private fun ChannelCard(analysis: BandAnalysis) {
     val idle = MaterialTheme.colorScheme.surfaceContainerHighest
     val busy = MaterialTheme.colorScheme.outline
     SectionCard(
-        "${analysis.band.label} channels",
+        title = "${analysis.band.label} channels",
         trailing = { Text("${analysis.networkCount} networks", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) },
     ) {
         val summary = buildString {

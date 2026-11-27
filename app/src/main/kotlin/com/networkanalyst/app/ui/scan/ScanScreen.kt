@@ -179,7 +179,7 @@ private fun IdleContent(
         }
 
         item {
-            SectionCard("Include in the scan") {
+            SectionCard(title = "Include in the scan") {
                 OptionRow(
                     title = "Speed test",
                     subtitle = if (connection.isMetered) {
@@ -320,7 +320,7 @@ private fun ResultContent(snapshot: NetworkSnapshot, diagnosis: Diagnosis, actio
 
         if (diagnosis.useCases.isNotEmpty()) {
             item {
-                SectionCard("What this connection is good for") {
+                SectionCard(title = "What this connection is good for") {
                     diagnosis.useCases.forEach { UseCaseRow(it) }
                 }
             }
@@ -416,7 +416,7 @@ private fun UseCaseRow(verdict: UseCaseVerdict) {
 
 @Composable
 private fun Measurements(snapshot: NetworkSnapshot) {
-    SectionCard("Measurements") {
+    SectionCard(title = "Measurements") {
         val connection = snapshot.connection
         DetailRow("Connection", connection.transport.label + if (connection.isVpn) " via VPN" else "")
         snapshot.wifiLink?.let { link ->
