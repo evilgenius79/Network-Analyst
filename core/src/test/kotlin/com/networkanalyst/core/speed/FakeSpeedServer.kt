@@ -75,6 +75,27 @@ class FakeSpeedServer(
         exchange.responseHeaders.add("country", "ZZ")
     }
 
+    /**
+     * Counts one request as active. [leave] must run before the client can learn the request
+     * is over (before the last byte or the response goes out); otherwise the client's next
+     * request could be counted while this one still is, overstating the peak.
+     */
+    private class Slot(private val all: AtomicInteger, private val kind: AtomicInteger, peak: AtomicInteger) {
+        private var left = false
+
+        init {
+            all.incrementAndGet()
+            kind.incrementAndGet().also { n -> peak.updateAndGet { maxOf(it, n) } }
+        }
+
+        fun leave() {
+            if (left) return
+            left = true
+            kind.decrementAndGet()
+            all.decrementAndGet()
+        }
+    }
+
     private fun download(exchange: HttpExchange) {
         val bytes = Regex("bytes=(\\d+)").find(exchange.requestURI.query ?: "")?.groupValues?.get(1)?.toLong() ?: 0
         addHeaders(exchange)
@@ -89,8 +110,7 @@ class FakeSpeedServer(
             exchange.sendResponseHeaders(downloadStatus, -1)
             return
         }
-        activeTransfers.incrementAndGet()
-        activeDownloads.incrementAndGet().also { n -> peakDownloads.updateAndGet { maxOf(it, n) } }
+        val slot = Slot(activeTransfers, activeDownloads, peakDownloads)
         try {
             exchange.sendResponseHeaders(200, bytes)
             val chunk = ByteArray(8 * 1024)
@@ -99,14 +119,14 @@ class FakeSpeedServer(
                 while (remaining > 0) {
                     val size = minOf(remaining, chunk.size.toLong()).toInt()
                     downPacer.pace(size)
+                    if (remaining - size == 0L) slot.leave()
                     out.write(chunk, 0, size)
                     bytesSent.addAndGet(size.toLong())
                     remaining -= size
                 }
             }
         } finally {
-            activeDownloads.decrementAndGet()
-            activeTransfers.decrementAndGet()
+            slot.leave()
         }
     }
 
@@ -116,8 +136,7 @@ class FakeSpeedServer(
             exchange.sendResponseHeaders(uploadStatus, -1)
             return
         }
-        activeTransfers.incrementAndGet()
-        activeUploads.incrementAndGet().also { n -> peakUploads.updateAndGet { maxOf(it, n) } }
+        val slot = Slot(activeTransfers, activeUploads, peakUploads)
         try {
             val chunk = ByteArray(8 * 1024)
             exchange.requestBody.use { input ->
@@ -129,10 +148,10 @@ class FakeSpeedServer(
                     bytesReceived.addAndGet(read.toLong())
                 }
             }
+            slot.leave()
             exchange.sendResponseHeaders(200, -1)
         } finally {
-            activeUploads.decrementAndGet()
-            activeTransfers.decrementAndGet()
+            slot.leave()
         }
     }
 
