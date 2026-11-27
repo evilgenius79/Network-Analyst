@@ -513,4 +513,37 @@ class DiagnosticEngineTest {
         assertEquals("95 Mbps", DiagnosticEngine.speedText(94.6))
         assertEquals("1.20 Gbps", DiagnosticEngine.speedText(1200.0))
     }
+
+    @Test
+    fun `findings from outside the scan join the report, the score and the headline`() {
+        val watched = Finding(
+            "connecting.recent", Category.CONNECTING, Severity.WARNING,
+            "This phone failed to join Wi-Fi 4 times in the last 24 hours", "4 of 9 attempts to connect failed.",
+        )
+        val plain = DiagnosticEngine.diagnose(healthy())
+        val withWatch = DiagnosticEngine.diagnose(healthy(), extra = listOf(watched))
+        assertEquals(Bottleneck.NONE, plain.bottleneck)
+        assertNotNull(withWatch.find("connecting.recent"))
+        assertTrue("a warning costs health", withWatch.healthScore < plain.healthScore)
+        // Failing to get onto the Wi-Fi is a problem between the phone and the router.
+        assertEquals(Bottleneck.WIFI, withWatch.bottleneck)
+        assertTrue(withWatch.summary.contains("this phone failed to join Wi-Fi 4 times"))
+    }
+
+    @Test
+    fun `the wifi is not vouched for when something is wrong with it too`() {
+        val badLine = healthy().copy(
+            internetPings = listOf(
+                PingResult("1.1.1.1", "Cloudflare", PingMethod.ICMP, 20, List(18) { 120.0 + (it % 4) * 2 }),
+                PingResult("8.8.8.8", "Google", PingMethod.ICMP, 20, List(17) { 130.0 + (it % 4) * 2 }),
+            ),
+            speed = speed(down = 3.2, up = 0.6),
+        )
+        val watched = Finding("connecting.recent", Category.CONNECTING, Severity.WARNING, "This phone failed to join Wi-Fi 4 times in the last 24 hours", "x")
+        val diagnosis = DiagnosticEngine.diagnose(badLine, extra = listOf(watched))
+        // The line is critical and so leads, but the summary must not call the Wi-Fi fine.
+        assertEquals(Bottleneck.INTERNET_LINE, diagnosis.bottleneck)
+        assertFalse(diagnosis.summary.contains("Wi-Fi link looks fine"))
+        assertTrue(diagnosis.summary.startsWith("The biggest problem is past the router"))
+    }
 }

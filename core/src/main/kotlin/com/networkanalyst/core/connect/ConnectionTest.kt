@@ -28,8 +28,19 @@ enum class ConnectFailure(val label: String, val explanation: String) {
         "Timed out",
         "Android neither connected nor reported a failure within the time allowed.",
     ),
-    DECLINED("Not allowed", "The request was declined in Android's approval dialog, so nothing was tested."),
+    DECLINED("Not allowed", "The request was declined in Android's approval dialog."),
+    REJECTED(
+        "Not accepted",
+        "Android turned the request down at once, before trying to connect. It only takes these requests from an app that is open on screen, with Wi-Fi switched on.",
+    ),
     UNKNOWN("Failed", "Android reported a failure without saying at which stage."),
+    ;
+
+    /**
+     * False for outcomes in which no connection was attempted at all. Those say nothing about
+     * the access point, so they end the test and are left out of its results.
+     */
+    val countsAsTest: Boolean get() = this != DECLINED && this != REJECTED
 }
 
 /** One access point radio to test, as seen in a scan. */
@@ -73,7 +84,6 @@ data class TargetResult(val target: TestTarget, val trials: List<ConnectTrial>) 
     /** Connected every time without a single silent retry (as far as can be seen). */
     val clean: Boolean get() = trials.isNotEmpty() && failures == 0 && (hiddenFailureCount ?: 0) == 0
     val dead: Boolean get() = trials.isNotEmpty() && successes == 0
-    val tested: Boolean get() = trials.any { it.failure != ConnectFailure.DECLINED }
 
     /** Reported failure reasons, most frequent first. */
     val failureReasons: List<Pair<ConnectFailure, Int>>
@@ -81,22 +91,33 @@ data class TargetResult(val target: TestTarget, val trials: List<ConnectTrial>) 
 }
 
 data class ConnectionTestReport(
+    /** Per access point, holding only the requests in which a connection was really attempted. */
     val results: List<TargetResult>,
     val findings: List<Finding>,
     /** One-line conclusion. */
     val headline: String,
+    /** Set when the test ended early because a request was never attempted, with the reason. */
+    val stoppedBy: ConnectFailure? = null,
 )
 
 /** Turns per-access-point results into conclusions about where the fault lies. */
 object ConnectionTestAnalyzer {
-    fun analyze(results: List<TargetResult>): ConnectionTestReport {
-        val tested = results.filter { it.tested && it.trials.isNotEmpty() }
+    fun analyze(allResults: List<TargetResult>): ConnectionTestReport {
+        // A request that was never attempted (declined, or not accepted by Android) is not a
+        // failed connection; it only explains why the test stopped where it did.
+        val stoppedBy = allResults.flatMap { it.trials }.mapNotNull { it.failure }.firstOrNull { !it.countsAsTest }
+        val results = allResults.map { r -> r.copy(trials = r.trials.filter { it.failure?.countsAsTest != false }) }
+        val tested = results.filter { it.trials.isNotEmpty() }
         if (tested.isEmpty()) {
-            val declined = results.any { r -> r.trials.any { it.failure == ConnectFailure.DECLINED } }
             return ConnectionTestReport(
                 results,
                 emptyList(),
-                if (declined) "Nothing was tested because the request was not allowed." else "Nothing was tested.",
+                when (stoppedBy) {
+                    ConnectFailure.DECLINED -> "Nothing was tested because the request was not allowed."
+                    ConnectFailure.REJECTED -> "Nothing was tested because Android did not accept the request."
+                    else -> "Nothing was tested."
+                },
+                stoppedBy,
             )
         }
         val findings = ArrayList<Finding>()
@@ -125,7 +146,7 @@ object ConnectionTestAnalyzer {
                     "This test connects with fresh settings. If only the saved network fails, forget the network on the phone and join it again, or reset the phone's Wi-Fi settings.",
                 ),
             )
-            return ConnectionTestReport(results, findings, "The network accepts this phone at every access point tested.")
+            return ConnectionTestReport(results, findings, "The network accepts this phone at every access point tested.", stoppedBy)
         }
 
         // ---- Nothing worked ----
@@ -155,7 +176,7 @@ object ConnectionTestAnalyzer {
                 "None of the $totalTrials connection requests succeeded. The usual reported reason was \"${dominant.label}\": ${dominant.explanation}",
                 fixes,
             )
-            return ConnectionTestReport(results, findings, title + ".")
+            return ConnectionTestReport(results, findings, title + ".", stoppedBy)
         }
 
         // ---- Mixed: some access points are fine, some are not ----
@@ -225,9 +246,8 @@ object ConnectionTestAnalyzer {
         }
 
         // ---- What the reported failures say ----
-        val failed = reasons.filter { it != ConnectFailure.DECLINED }
-        if (failed.isNotEmpty()) {
-            val top = failed.groupingBy { it }.eachCount().maxByOrNull { it.value }!!
+        if (reasons.isNotEmpty()) {
+            val top = reasons.groupingBy { it }.eachCount().maxByOrNull { it.value }!!
             if (top.key == ConnectFailure.IP_ADDRESS) {
                 findings += Finding(
                     "connect.dhcp", Category.CONNECTING, Severity.WARNING,
@@ -257,7 +277,7 @@ object ConnectionTestAnalyzer {
             findings.any { it.id == "connect.some_aps" } -> "The trouble is tied to specific access points."
             else -> "Connecting is unreliable everywhere."
         }
-        return ConnectionTestReport(results, findings.sortedBy { it.severity.ordinal }, headline)
+        return ConnectionTestReport(results, findings.sortedBy { it.severity.ordinal }, headline, stoppedBy)
     }
 
     private fun plural(count: Int) = if (count == 1) "" else "s"

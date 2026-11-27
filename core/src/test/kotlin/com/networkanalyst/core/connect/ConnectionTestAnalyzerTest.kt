@@ -181,4 +181,25 @@ class ConnectionTestAnalyzerTest {
         assertEquals("Nothing was tested.", ConnectionTestAnalyzer.analyze(emptyList()).headline)
         assertEquals("Nothing was tested.", ConnectionTestAnalyzer.analyze(listOf(result(ap5))).headline)
     }
+
+    @Test
+    fun `a request Android would not take ends the test without counting against the access point`() {
+        // The app left the screen after two good connections; the third request was refused outright.
+        val report = ConnectionTestAnalyzer.analyze(
+            listOf(result(ap24, ok(ap24), ok(ap24), failed(ap24, ConnectFailure.REJECTED)), result(ap5)),
+        )
+        assertEquals(ConnectFailure.REJECTED, report.stoppedBy)
+        assertEquals("the refused request is not shown as a trial", 2, report.results.first().trials.size)
+        assertEquals(listOf("connect.all_ok"), report.findings.map { it.id })
+        assertTrue(report.findings.single().detail.contains("All 2 connection requests across 1 access point radio succeeded"))
+
+        val nothing = ConnectionTestAnalyzer.analyze(listOf(result(ap24, failed(ap24, ConnectFailure.REJECTED))))
+        assertEquals("Nothing was tested because Android did not accept the request.", nothing.headline)
+        assertEquals(ConnectFailure.REJECTED, nothing.stoppedBy)
+        assertTrue(nothing.findings.isEmpty())
+
+        // A real failure is still a failure, and a normal run has nothing to report here.
+        assertEquals(null, ConnectionTestAnalyzer.analyze(listOf(result(ap5, failed(ap5, ConnectFailure.ASSOCIATION)))).stoppedBy)
+        assertTrue(ConnectFailure.entries.filter { !it.countsAsTest } == listOf(ConnectFailure.DECLINED, ConnectFailure.REJECTED))
+    }
 }

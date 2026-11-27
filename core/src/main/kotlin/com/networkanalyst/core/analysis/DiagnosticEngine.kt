@@ -36,8 +36,12 @@ object DiagnosticEngine {
     private const val LOSS_NOTABLE = 2.5
     private const val LOSS_SEVERE = 10.0
 
-    fun diagnose(snapshot: NetworkSnapshot, baseline: SpeedBaseline? = null): Diagnosis {
-        val findings = ArrayList<Finding>()
+    /**
+     * @param extra findings from outside the scan itself that belong in the same report, such
+     *   as what the connection watch has recorded; they count towards the score and headline
+     */
+    fun diagnose(snapshot: NetworkSnapshot, baseline: SpeedBaseline? = null, extra: List<Finding> = emptyList()): Diagnosis {
+        val findings = ArrayList<Finding>(extra)
         val context = Context(snapshot, baseline, findings)
 
         context.connection()
@@ -883,12 +887,18 @@ object DiagnosticEngine {
 
         // ------------------------------------------------------------------ verdict
 
+        /** Findings that put the blame between the phone and the router. */
+        private val WIFI_TROUBLE = arrayOf(
+            "wifi.signal.veryweak", "wifi.signal.weak", "wifi.signal.unstable", "wifi.roaming", "wifi.band.slow", "wifi.standard.legacy",
+            "wifi.security.legacy", "wifi.width.24wide", "wifi.linkrate", "wifi.channel.crowded", "local.", "connecting.",
+        )
+
         fun bottleneck(sorted: List<Finding>): Bottleneck {
             if (connection.transport == Transport.NONE) return Bottleneck.NO_CONNECTION
             fun any(severity: Severity, vararg prefixes: String) =
                 sorted.any { f -> f.severity == severity && prefixes.any { f.id.startsWith(it) } }
 
-            val wifi = arrayOf("wifi.signal.veryweak", "wifi.signal.weak", "wifi.signal.unstable", "wifi.roaming", "wifi.band.slow", "wifi.standard.legacy", "wifi.security.legacy", "wifi.width.24wide", "wifi.linkrate", "wifi.channel.crowded", "local.")
+            val wifi = WIFI_TROUBLE
             val line = arrayOf("internet.", "speed.", "connection.nointernet", "router.wanlink", "router.background", "nat.double")
             val candidates = listOf(
                 Bottleneck.WIFI to wifi,
@@ -914,7 +924,8 @@ object DiagnosticEngine {
                 Bottleneck.WIFI -> "Your Wi-Fi is the weak point" to
                     "The biggest problem is inside your home, between this phone and the router: ${top?.title?.replaceFirstChar { it.lowercase() }}.$more"
                 Bottleneck.INTERNET_LINE -> "The internet line is the weak point" to
-                    (if (onWifi) "Your Wi-Fi link looks fine. " else "") +
+                    // Only vouch for the Wi-Fi when nothing was found wrong with it.
+                    (if (onWifi && sorted.none { f -> f.severity <= Severity.WARNING && WIFI_TROUBLE.any { f.id.startsWith(it) } }) "Your Wi-Fi link looks fine. " else "") +
                     "The biggest problem is past the router, on the line or at the provider: ${top?.title?.replaceFirstChar { it.lowercase() }}.$more"
                 Bottleneck.BUFFERBLOAT -> "The connection lags when it is busy" to
                     "Latency shoots up whenever the line is in heavy use, so calls, games and page loads lag while anyone is downloading or uploading. A router setting fixes this.$more"

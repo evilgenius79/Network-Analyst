@@ -114,4 +114,56 @@ class WatchReportTest {
         assertTrue(text.contains("Connection test started: Home"))
         assertEquals("Disconnected", WatchLogText.describe(WifiEvent(0, WifiEventKind.LINK_DOWN)))
     }
+
+    @Test
+    fun `events read in everyday words on screen`() {
+        fun plain(kind: WifiEventKind, value: String = "") = WatchLogText.plain(WifiEvent(0, kind, value))
+        assertEquals("Asking an access point to let the phone join", plain(WifiEventKind.SUPPLICANT, "ASSOCIATING"))
+        assertEquals("Exchanging encryption keys", plain(WifiEventKind.SUPPLICANT, "FOUR_WAY_HANDSHAKE"))
+        assertEquals("Wi-Fi link is down", plain(WifiEventKind.SUPPLICANT, "DISCONNECTED"))
+        assertEquals("Asking for an IP address", plain(WifiEventKind.NETWORK, "OBTAINING_IPADDR"))
+        assertEquals("Android reported a wrong password", plain(WifiEventKind.AUTH_ERROR, "WRONG_PASSWORD"))
+        assertEquals("Wi-Fi connection was lost", plain(WifiEventKind.LINK_DOWN))
+        assertEquals("Already connected when watching started", plain(WifiEventKind.LINK_UP, "Already connected when watching started"))
+        assertEquals("Wi-Fi switched off", plain(WifiEventKind.WIFI_SWITCH, "off"))
+        // A state this app does not know is shown as Android names it rather than hidden.
+        assertEquals("Wi-Fi step: FILS_SOMETHING", plain(WifiEventKind.SUPPLICANT, "FILS_SOMETHING"))
+        assertEquals("Network: SUSPENDED", plain(WifiEventKind.NETWORK, "SUSPENDED"))
+    }
+
+    @Test
+    fun `repeated failures in the last day become one finding for the scan report`() {
+        val hour = 3_600_000L
+        val now = 100 * hour
+        fun refused(at: Long) = listOf(s(at, "ASSOCIATING"), s(at + 2_000, "DISCONNECTED"))
+
+        // One failed attempt can be as innocent as walking out of range.
+        assertNull(WatchAnalyzer.recentFinding(refused(now - hour) + good(now - hour + 10_000), now))
+        assertNull(WatchAnalyzer.recentFinding(emptyList(), now))
+
+        val finding = WatchAnalyzer.recentFinding(refused(now - 5 * hour) + refused(now - 3 * hour) + good(now - hour), now)!!
+        assertEquals("connecting.recent", finding.id)
+        assertEquals(Severity.WARNING, finding.severity)
+        assertEquals("This phone failed to join Wi-Fi 2 times in the last 24 hours", finding.title)
+        assertTrue(finding.detail.startsWith("2 of 3 attempts to connect failed, 2 of them at \"Joining the access point\"."))
+        assertTrue(finding.fixes.first().contains("Connect tab"))
+
+        // Older than a day does not count, and neither do connections the app's own test made.
+        assertNull(WatchAnalyzer.recentFinding(refused(now - 40 * hour) + refused(now - 30 * hour), now))
+        val duringTest = listOf(WifiEvent(now - 2 * hour, WifiEventKind.TEST_START, "Home")) + refused(now - 2 * hour + 1_000) + refused(now - 2 * hour + 9_000) +
+            listOf(WifiEvent(now - 2 * hour + 20_000, WifiEventKind.TEST_END))
+        assertNull(WatchAnalyzer.recentFinding(duringTest, now))
+    }
+
+    @Test
+    fun `repeated drops alone are also raised`() {
+        val hour = 3_600_000L
+        val now = 100 * hour
+        fun connectedThenDropped(at: Long) = good(at) + listOf(WifiEvent(at + 600_000, WifiEventKind.SUPPLICANT, "DISCONNECTED", rssiDbm = -50))
+        val events = connectedThenDropped(now - 6 * hour) + connectedThenDropped(now - 4 * hour) + connectedThenDropped(now - 2 * hour)
+        val finding = WatchAnalyzer.recentFinding(events, now)!!
+        assertEquals("The Wi-Fi connection dropped 3 times in the last 24 hours", finding.title)
+        assertTrue(finding.detail.startsWith("An established connection was lost 3 times."))
+        assertNull(WatchAnalyzer.recentFinding(events.take(events.size - 6), now))
+    }
 }
