@@ -1,6 +1,7 @@
 package com.networkanalyst.app.ui.components
 
 import java.text.DateFormat
+import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
@@ -33,4 +34,7 @@ object Fmt {
 
     fun dateTime(timestampMs: Long): String =
         DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(timestampMs))
+
+    /** Day and time to the second, for event logs where the order within a minute matters. */
+    fun logTime(timestampMs: Long): String = SimpleDateFormat("d MMM HH:mm:ss", Locale.getDefault()).format(Date(timestampMs))
 }

@@ -8,6 +8,7 @@ import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -43,7 +44,36 @@ class MainActivitySmokeTest {
         rule.onNodeWithText("Devices on your network").assertIsDisplayed()
         rule.onNode(hasText("Scan for devices") and hasClickAction()).assertIsNotEnabled()
 
+        tab("Connect").performClick()
+        rule.onNodeWithText("Why won't it connect?").assertIsDisplayed()
+        // Without the location permission there is no list of access points to test, and the
+        // screen must say so. The connection watch is there regardless.
+        rule.onNodeWithText("Allow location to list access points").assertIsDisplayed()
+
         tab("Scan").performClick()
         rule.onNodeWithText("Include in the scan").assertIsDisplayed()
+    }
+
+    @Test
+    fun `leaving and reopening the app is noted in the watch log`() {
+        val graph = (rule.activity.application as NetworkAnalystApp).graph
+        fun notes() = graph.monitor.events.value.filter { it.kind == com.networkanalyst.core.connect.WifiEventKind.NOTE }.map { it.value }
+
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        assertTrue(notes().last() == AppGraph.NOTE_HIDDEN)
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        assertTrue(notes().last() == AppGraph.NOTE_REOPENED)
+
+        // A rotation restarts the screen but is not leaving the app.
+        val before = notes().size
+        rule.activityRule.scenario.recreate()
+        assertTrue(notes().size == before)
+
+        // With background watching on, nothing is missed, so nothing is noted.
+        graph.watchingInBackground.value = true
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        assertTrue(notes().size == before)
+        graph.watchingInBackground.value = false
     }
 }

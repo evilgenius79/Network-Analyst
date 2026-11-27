@@ -2,6 +2,7 @@ package com.networkanalyst.app
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -13,11 +14,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -26,6 +30,8 @@ import com.networkanalyst.app.ui.AppScaffold
 import com.networkanalyst.app.ui.MainViewModel
 import com.networkanalyst.app.ui.ScanUiState
 import com.networkanalyst.app.ui.Tab
+import com.networkanalyst.app.ui.connect.ConnectActions
+import com.networkanalyst.app.ui.connect.ConnectScreen
 import com.networkanalyst.app.ui.devices.DevicesActions
 import com.networkanalyst.app.ui.devices.DevicesScreen
 import com.networkanalyst.app.ui.scan.ScanActions
@@ -79,6 +85,8 @@ private fun App(viewModel: MainViewModel, onShare: (String) -> Unit, onOpenLocat
     val wifi by viewModel.wifiState.collectAsStateWithLifecycle()
     val speed by viewModel.speed.collectAsStateWithLifecycle()
     val devices by viewModel.devices.collectAsStateWithLifecycle()
+    val connect by viewModel.connect.collectAsStateWithLifecycle()
+    val watch by viewModel.watch.collectAsStateWithLifecycle()
     val onWifi = connection.transport == Transport.WIFI
 
     // Permission dialogs. Whatever the answer, re-read the state; the scan copes without them.
@@ -91,6 +99,18 @@ private fun App(viewModel: MainViewModel, onShare: (String) -> Unit, onOpenLocat
         }
     }
     val requestPermissions = { permissionLauncher.launch(runtimePermissions()) }
+
+    // Background watching shows a notification, which Android 13+ asks the user to allow. The
+    // watch runs either way; a refusal only keeps the notification out of the drawer.
+    val context = LocalContext.current
+    val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        viewModel.setBackgroundWatch(true)
+    }
+    val setBackgroundWatch = { enabled: Boolean ->
+        val mustAsk = enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        if (mustAsk) notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) else viewModel.setBackgroundWatch(enabled)
+    }
 
     // The user may have changed permissions or Location in system settings while away.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshPermissions() }
@@ -105,8 +125,14 @@ private fun App(viewModel: MainViewModel, onShare: (String) -> Unit, onOpenLocat
         }
     }
 
-    // Tests need the screen on: Android only honours the low-latency Wi-Fi mode while it is.
-    val busy = scan is ScanUiState.Running || speed.running || devices.scanning
+    // The connection test needs the list of access points in range.
+    if (tab == Tab.CONNECT) {
+        LaunchedEffect(permissions.canScanWifi) { viewModel.loadConnectTargets() }
+    }
+
+    // Tests need the screen on: Android only honours the low-latency Wi-Fi mode while it is,
+    // and only lets an app on screen ask for a connection.
+    val busy = scan is ScanUiState.Running || speed.running || devices.scanning || connect.running
     val view = LocalView.current
     DisposableEffect(busy) {
         view.keepScreenOn = busy
@@ -171,6 +197,27 @@ private fun App(viewModel: MainViewModel, onShare: (String) -> Unit, onOpenLocat
                     onScan = viewModel::startDeviceScan,
                     onCancel = viewModel::cancelDeviceScan,
                     onRequestPermissions = requestPermissions,
+                ),
+                contentPadding = padding,
+            )
+            Tab.CONNECT -> ConnectScreen(
+                state = connect,
+                watch = watch,
+                permissions = permissions,
+                scanning = wifi.scanning,
+                actions = ConnectActions(
+                    onSelectNetwork = viewModel::selectConnectNetwork,
+                    onToggleTarget = viewModel::toggleConnectTarget,
+                    onPasswordChange = viewModel::setConnectPassword,
+                    onTrialsChange = viewModel::setConnectTrials,
+                    onStart = viewModel::startConnectTest,
+                    onCancel = viewModel::cancelConnectTest,
+                    onRescan = viewModel::rescanWifi,
+                    onShare = { onShare(viewModel.connectReportText()) },
+                    onBackgroundWatchChange = setBackgroundWatch,
+                    onClearLog = viewModel::clearWatchLog,
+                    onRequestPermissions = requestPermissions,
+                    onOpenLocationSettings = onOpenLocationSettings,
                 ),
                 contentPadding = padding,
             )

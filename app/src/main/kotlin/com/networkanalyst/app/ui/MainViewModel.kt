@@ -7,14 +7,25 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.networkanalyst.app.data.ConnectivityCollector
+import com.networkanalyst.app.NetworkAnalystApp
+import com.networkanalyst.app.data.ConnectTestProgress
+import com.networkanalyst.app.data.ConnectionTestUnavailable
+import com.networkanalyst.app.data.ConnectionTester
 import com.networkanalyst.app.data.ScanCoordinator
 import com.networkanalyst.app.data.ScanOptions
 import com.networkanalyst.app.data.ScanProgress
 import com.networkanalyst.app.data.SpeedLive
-import com.networkanalyst.app.data.WifiCollector
+import com.networkanalyst.app.data.WatchService
 import com.networkanalyst.core.analysis.Diagnosis
 import com.networkanalyst.core.analysis.DiagnosticEngine
+import com.networkanalyst.core.connect.ConnectReportText
+import com.networkanalyst.core.connect.ConnectionTestAnalyzer
+import com.networkanalyst.core.connect.ConnectionTestReport
+import com.networkanalyst.core.connect.TargetPicker
+import com.networkanalyst.core.connect.TestNetwork
+import com.networkanalyst.core.connect.WatchAnalyzer
+import com.networkanalyst.core.connect.WatchReport
+import com.networkanalyst.core.connect.WifiEvent
 import com.networkanalyst.core.discovery.LanScanResult
 import com.networkanalyst.core.history.HistoryEntry
 import com.networkanalyst.core.history.HistoryStore
@@ -34,11 +45,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /** Which permissions and switches the scan depends on, as they stand right now. */
 data class PermissionsState(
@@ -80,11 +92,77 @@ data class DevicesUiState(
     val unavailable: Boolean = false,
 )
 
+/** The connection test: what can be tested, what was chosen, and how it went. */
+data class ConnectUiState(
+    /** False below Android 10, where apps cannot request a connection to a chosen access point. */
+    val supported: Boolean = true,
+    /** Android names the failing stage itself (Android 14 and newer). */
+    val reportsStage: Boolean = true,
+    /** The phone can run the test alongside its normal Wi-Fi connection. */
+    val keepsNormalConnection: Boolean = false,
+    /** Networks in range, from the latest Wi-Fi scan. */
+    val networks: List<TestNetwork> = emptyList(),
+    /** Name of the network chosen for testing. */
+    val ssid: String? = null,
+    /** Access point radios (by address) ticked for testing. */
+    val selected: Set<String> = emptySet(),
+    /** Held in memory only for the test; never written to storage. */
+    val password: String = "",
+    val trialsPerTarget: Int = DEFAULT_TRIALS,
+    val running: Boolean = false,
+    val progress: ConnectTestProgress? = null,
+    val report: ConnectionTestReport? = null,
+    /** Why the test could not start, written for the user. */
+    val error: String? = null,
+) {
+    val network: TestNetwork? get() = networks.firstOrNull { it.ssid == ssid }
+
+    /** What is wrong with the password as typed, or null when it can be used (or is not needed). */
+    val passwordProblem: String?
+        get() = when {
+            network?.needsPassword != true -> null
+            !ConnectionTester.isAscii(password) -> ConnectionTester.NON_ASCII_PASSWORD
+            // WPA2 and WPA3 passwords are 8 to 63 characters.
+            password.length !in 8..63 -> "Wi-Fi passwords are 8 to 63 characters."
+            else -> null
+        }
+
+    val passwordOk: Boolean get() = passwordProblem == null
+
+    val canStart: Boolean
+        get() = supported && !running && network?.testable == true && passwordOk &&
+            network?.targets.orEmpty().any { it.bssid in selected }
+
+    /** Connection requests the test will make with the current choices. */
+    val requestCount: Int get() = network?.targets.orEmpty().count { it.bssid in selected } * trialsPerTarget
+
+    companion object {
+        const val DEFAULT_TRIALS = 3
+        val TRIAL_CHOICES = listOf(1, 3, 5)
+    }
+}
+
+/** What the connection watch has recorded. */
+data class WatchUiState(
+    val report: WatchReport = WatchAnalyzer.analyze(emptyList()),
+    /** Latest events, newest first. */
+    val recent: List<WifiEvent> = emptyList(),
+    /** Events held in the log altogether. */
+    val total: Int = 0,
+    /** True while the background service keeps the watch running off screen. */
+    val background: Boolean = false,
+    val error: String? = null,
+)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
-    private val connectivity = ConnectivityCollector(application)
-    private val wifi = WifiCollector(application, connectivity)
-    private val coordinator = ScanCoordinator(application, connectivity, wifi)
-    private val history = HistoryStore(File(application.filesDir, "history.json"))
+    // Shared with the background watch service, so both see one network state and one log.
+    private val graph = (application as NetworkAnalystApp).graph
+    private val connectivity = graph.connectivity
+    private val wifi = graph.wifi
+    private val coordinator = graph.coordinator
+    private val history = graph.history
+    private val monitor = graph.monitor
+    private val tester = graph.tester
 
     val connection: StateFlow<ConnectionInfo> = connectivity.connection
 
@@ -106,22 +184,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _devices = MutableStateFlow(DevicesUiState())
     val devices: StateFlow<DevicesUiState> = _devices.asStateFlow()
 
+    private val _connect = MutableStateFlow(
+        ConnectUiState(supported = tester.supported, reportsStage = tester.reportsStage, keepsNormalConnection = tester.keepsNormalConnection),
+    )
+    val connect: StateFlow<ConnectUiState> = _connect.asStateFlow()
+
+    private val _watch = MutableStateFlow(WatchUiState())
+    val watch: StateFlow<WatchUiState> = _watch.asStateFlow()
+
     private var scanJob: Job? = null
     private var speedJob: Job? = null
     private var devicesJob: Job? = null
+    private var connectJob: Job? = null
     private var wifiMonitorJob: Job? = null
 
+    /** True once the user has ticked or unticked an access point, so their choice is kept. */
+    private var connectSelectionEdited = false
+
     init {
-        connectivity.start()
         refreshPermissions()
         viewModelScope.launch(Dispatchers.IO) {
             val entries = history.load()
             _speed.update { it.copy(history = entries.asReversed()) }
         }
-    }
-
-    override fun onCleared() {
-        connectivity.stop()
+        viewModelScope.launch {
+            combine(monitor.events, graph.watchingInBackground, graph.watchError) { events, background, error -> Triple(events, background, error) }
+                .collectLatest { (events, background, error) ->
+                    val report = withContext(Dispatchers.Default) { WatchAnalyzer.analyze(events) }
+                    _watch.value = WatchUiState(report, events.takeLast(RECENT_EVENTS).asReversed(), events.size, background, error)
+                }
+        }
     }
 
     /** Re-reads permission and location state; call when the app returns to the foreground. */
@@ -142,7 +234,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ------------------------------------------------------------------ full scan
 
-    val isBusy: Boolean get() = scanJob?.isActive == true || speedJob?.isActive == true || devicesJob?.isActive == true
+    val isBusy: Boolean
+        get() = scanJob?.isActive == true || speedJob?.isActive == true || devicesJob?.isActive == true || connectJob?.isActive == true
 
     fun startScan() {
         if (isBusy) return
@@ -157,7 +250,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val snapshot = outcome.snapshot
                 val key = networkKey(snapshot.connection, snapshot.wifiLink)
                 val entries = withContext(Dispatchers.IO) { history.load() }
-                val diagnosis = DiagnosticEngine.diagnose(snapshot, HistoryStore.baseline(entries, key.first))
+                // What the connection watch has seen lately belongs in the same report.
+                val watched = listOfNotNull(WatchAnalyzer.recentFinding(monitor.events.value, System.currentTimeMillis()))
+                val diagnosis = DiagnosticEngine.diagnose(snapshot, HistoryStore.baseline(entries, key.first), watched)
                 recordHistory(key, snapshot.speed, diagnosis.healthScore)
                 // Share what the scan learned with the other tabs.
                 outcome.lan?.let { lan -> _devices.value = DevicesUiState(result = lan) }
@@ -286,6 +381,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val link = wifi.currentLink(scan.accessPoints)
         val connected = scan.accessPoints.firstOrNull { it.isConnected }
         _wifi.update { it.copy(scan = scan, link = link, bands = ChannelAnalyzer.analyze(scan.accessPoints, connected)) }
+        applyConnectNetworks(TargetPicker.networks(scan.accessPoints, link?.ssid))
     }
 
     // ------------------------------------------------------------------ devices tab
@@ -310,9 +406,130 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         devicesJob?.cancel()
     }
 
+    // ------------------------------------------------------------------ connect tab
+
+    /** Brings the list of testable networks up to date with a scan, keeping the user's choices. */
+    private fun applyConnectNetworks(networks: List<TestNetwork>) {
+        _connect.update { state ->
+            when {
+                // The test is working through the list it started with; leave it alone.
+                state.running -> state
+                // The phone sees nothing while it is between networks, as it is right after a
+                // test. An empty list then is not news; keep what was there.
+                networks.isEmpty() && state.networks.isNotEmpty() -> state
+                else -> {
+                    val chosen = networks.firstOrNull { it.ssid == state.ssid } ?: networks.firstOrNull()
+                    val present = chosen?.targets.orEmpty().map { it.bssid }.toSet()
+                    val kept = state.selected intersect present
+                    val keep = chosen?.ssid == state.ssid && connectSelectionEdited && kept.isNotEmpty()
+                    if (!keep) connectSelectionEdited = false
+                    state.copy(
+                        networks = networks,
+                        ssid = chosen?.ssid,
+                        selected = if (keep) kept else TargetPicker.defaultSelection(chosen?.targets.orEmpty()),
+                    )
+                }
+            }
+        }
+    }
+
+    /** Makes sure the Connect tab has access points to offer; called when the tab opens. */
+    fun loadConnectTargets() {
+        if (_connect.value.running || !_permissions.value.canScanWifi) return
+        if (_connect.value.networks.isEmpty()) rescanWifi() else refreshWifi()
+    }
+
+    fun selectConnectNetwork(ssid: String) {
+        connectSelectionEdited = false
+        _connect.update { state ->
+            val network = state.networks.firstOrNull { it.ssid == ssid }
+            if (state.running || network == null || ssid == state.ssid) {
+                state
+            } else {
+                // A different network has a different password and its own results.
+                state.copy(ssid = ssid, selected = TargetPicker.defaultSelection(network.targets), password = "", report = null, error = null)
+            }
+        }
+    }
+
+    fun toggleConnectTarget(bssid: String) {
+        connectSelectionEdited = true
+        _connect.update { state ->
+            if (state.running) state else state.copy(selected = if (bssid in state.selected) state.selected - bssid else state.selected + bssid)
+        }
+    }
+
+    fun setConnectPassword(password: String) {
+        // The field reports its text whenever it appears, not only on edits; an unchanged
+        // password must not wipe a message the user has yet to read.
+        _connect.update { if (it.password == password) it else it.copy(password = password, error = null) }
+    }
+
+    fun setConnectTrials(count: Int) {
+        _connect.update { if (it.running) it else it.copy(trialsPerTarget = count.coerceIn(1, MAX_CONNECT_TRIALS)) }
+    }
+
+    fun startConnectTest() {
+        if (isBusy) return
+        val state = _connect.value
+        val network = state.network ?: return
+        val targets = network.targets.filter { it.bssid in state.selected }
+        val total = targets.size * state.trialsPerTarget
+        connectJob = viewModelScope.launch {
+            _connect.update { it.copy(running = true, error = null, report = null, progress = ConnectTestProgress("Starting", 0, total, emptyList())) }
+            try {
+                val results = withContext(Dispatchers.Default) {
+                    tester.run(targets, network.security, state.password.takeIf { network.needsPassword }, state.trialsPerTarget) { progress ->
+                        _connect.update { it.copy(progress = progress) }
+                    }
+                }
+                _connect.update { it.copy(running = false, progress = null, report = ConnectionTestAnalyzer.analyze(results)) }
+            } catch (e: ConnectionTestUnavailable) {
+                _connect.update { it.copy(running = false, progress = null, error = e.message) }
+            } catch (e: CancellationException) {
+                // Keep what was learned before the test was stopped.
+                val partial = _connect.value.progress?.results.orEmpty()
+                _connect.update {
+                    it.copy(running = false, progress = null, report = if (partial.any { r -> r.trials.isNotEmpty() }) ConnectionTestAnalyzer.analyze(partial) else null)
+                }
+                throw e
+            }
+        }
+    }
+
+    fun cancelConnectTest() {
+        connectJob?.cancel()
+    }
+
+    /** Plain-text version of the connection test and the watch log, for the share sheet. */
+    fun connectReportText(): String = ConnectReportText.build(_connect.value.report, monitor.events.value)
+
+    fun clearWatchLog() {
+        monitor.clear()
+    }
+
+    /**
+     * Starts or stops the service that keeps the watch recording while the app is off screen.
+     * Must be called while the app is on screen; Android refuses to start it otherwise.
+     */
+    fun setBackgroundWatch(enabled: Boolean) {
+        val app = getApplication<Application>()
+        if (enabled) {
+            try {
+                WatchService.start(app)
+            } catch (e: RuntimeException) {
+                graph.watchError.value = "Android would not start background watching: ${e.message ?: e.javaClass.simpleName}"
+            }
+        } else {
+            WatchService.stop(app)
+        }
+    }
+
     companion object {
         /** On metered connections each direction of the speed test stops after this much data. */
         const val METERED_BYTE_CAP = 100_000_000L
         private const val RSSI_HISTORY_POINTS = 90
+        private const val RECENT_EVENTS = 40
+        private const val MAX_CONNECT_TRIALS = 5
     }
 }

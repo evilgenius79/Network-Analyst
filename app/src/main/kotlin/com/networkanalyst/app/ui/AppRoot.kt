@@ -5,6 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Troubleshoot
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -24,6 +25,7 @@ enum class Tab(val label: String, val title: String, val icon: ImageVector) {
     WIFI("Wi-Fi", "Wi-Fi", Icons.Filled.Wifi),
     SPEED("Speed", "Speed test", Icons.Filled.Speed),
     DEVICES("Devices", "Devices", Icons.Filled.Devices),
+    CONNECT("Connect", "Connection test", Icons.Filled.Troubleshoot),
 }
 
 /** The frame around every screen: title bar on top, tabs at the bottom. */

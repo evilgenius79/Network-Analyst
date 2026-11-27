@@ -72,9 +72,14 @@ class ConnectivityCollector(context: Context) {
         }
     }
 
+    /** Told when the Wi-Fi link comes up (true) or goes away (false). */
+    @Volatile var wifiLinkListener: ((Boolean) -> Unit)? = null
+
     private fun wifiCapabilities(network: Network, capabilities: NetworkCapabilities) {
+        val isNew = wifi?.network != network
         wifi = Tracked(network, capabilities, wifi?.takeIf { it.network == network }?.link)
         publish()
+        if (isNew) wifiLinkListener?.invoke(true)
     }
 
     private fun wifiLink(network: Network, link: LinkProperties) {
@@ -83,8 +88,10 @@ class ConnectivityCollector(context: Context) {
     }
 
     private fun wifiLost(network: Network) {
-        if (wifi?.network == network) wifi = null
+        val wasCurrent = wifi?.network == network
+        if (wasCurrent) wifi = null
         publish()
+        if (wasCurrent) wifiLinkListener?.invoke(false)
     }
 
     private var started = false

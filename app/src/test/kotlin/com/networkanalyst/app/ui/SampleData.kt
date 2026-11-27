@@ -1,10 +1,20 @@
 package com.networkanalyst.app.ui
 
+import com.networkanalyst.app.data.ConnectTestProgress
 import com.networkanalyst.app.data.ScanProgress
 import com.networkanalyst.app.data.ScanStep
 import com.networkanalyst.app.data.SpeedLive
 import com.networkanalyst.app.data.StepStatus
 import com.networkanalyst.core.analysis.DiagnosticEngine
+import com.networkanalyst.core.connect.ConnectFailure
+import com.networkanalyst.core.connect.ConnectTrial
+import com.networkanalyst.core.connect.ConnectionTestAnalyzer
+import com.networkanalyst.core.connect.FailedStage
+import com.networkanalyst.core.connect.TargetPicker
+import com.networkanalyst.core.connect.TargetResult
+import com.networkanalyst.core.connect.WatchAnalyzer
+import com.networkanalyst.core.connect.WifiEvent
+import com.networkanalyst.core.connect.WifiEventKind
 import com.networkanalyst.core.discovery.LanScanResult
 import com.networkanalyst.core.history.HistoryEntry
 import com.networkanalyst.core.model.AccessPoint
@@ -173,4 +183,104 @@ object SampleData {
             scannedHosts = 254,
         ),
     )
+
+    // ------------------------------------------------------------------ connect tab
+
+    /** A three-unit mesh, each unit with a 2.4 GHz and a 5 GHz radio, plus the neighbours. */
+    private val meshAccessPoints = listOf(
+        ap("Home", "a4:11:22:33:44:51", -47, 5180, 80, connected = true),
+        ap("Home", "a4:11:22:33:44:50", -44, 2437),
+        ap("Home", "a4:11:22:33:55:61", -63, 5745, 80),
+        ap("Home", "a4:11:22:33:55:60", -60, 2412),
+        ap("Home", "a4:11:22:33:66:71", -84, 5500, 80),
+        ap("Home", "a4:11:22:33:66:70", -78, 2462),
+        ap("Vodafone-8F2A", "10:00:00:00:01:01", -58, 2437, standard = WifiStandard.N),
+        ap("NETGEAR42", "10:00:00:00:02:01", -66, 2437),
+        ap("CoffeeShop Guest", "10:00:00:00:06:01", -80, 2412, security = WifiSecurity.OPEN, standard = WifiStandard.N),
+    )
+
+    private val connectNetworks = TargetPicker.networks(meshAccessPoints, "Home")
+    private val home = connectNetworks.first()
+    private val homeSelection = TargetPicker.defaultSelection(home.targets)
+
+    val connectSetup = ConnectUiState(networks = connectNetworks, ssid = "Home", selected = homeSelection, password = "correct horse battery")
+
+    private fun trial(bssid: String, seconds: Double, vararg retries: FailedStage) =
+        ConnectTrial(bssid, success = true, durationMs = (seconds * 1000).toLong(), hiddenFailures = retries.toList())
+
+    private fun failed(bssid: String, reason: ConnectFailure, seconds: Double, vararg retries: FailedStage) =
+        ConnectTrial(bssid, success = false, failure = reason, durationMs = (seconds * 1000).toLong(), hiddenFailures = retries.toList())
+
+    /** 2.4 GHz takes the phone every time; 5 GHz refuses it or needs retries. */
+    private val connectResults = home.targets.filter { it.bssid in homeSelection }.map { target ->
+        val b = target.bssid
+        TargetResult(
+            target,
+            when (b) {
+                "a4:11:22:33:44:50" -> listOf(trial(b, 1.9), trial(b, 2.2), trial(b, 1.8))
+                "a4:11:22:33:55:60" -> listOf(trial(b, 2.4), trial(b, 2.1), trial(b, 2.6))
+                "a4:11:22:33:66:70" -> listOf(trial(b, 3.1), trial(b, 2.9), trial(b, 3.4))
+                "a4:11:22:33:44:51" -> listOf(
+                    failed(b, ConnectFailure.ASSOCIATION, 21.4, FailedStage.JOINING, FailedStage.JOINING, FailedStage.JOINING),
+                    trial(b, 9.7, FailedStage.JOINING),
+                    failed(b, ConnectFailure.ASSOCIATION, 22.0, FailedStage.JOINING, FailedStage.JOINING, FailedStage.JOINING),
+                )
+                else -> listOf(
+                    failed(b, ConnectFailure.ASSOCIATION, 20.8, FailedStage.JOINING, FailedStage.JOINING, FailedStage.JOINING),
+                    failed(b, ConnectFailure.ASSOCIATION, 21.1, FailedStage.JOINING, FailedStage.JOINING, FailedStage.JOINING),
+                    failed(b, ConnectFailure.ASSOCIATION, 20.5, FailedStage.JOINING, FailedStage.JOINING, FailedStage.JOINING),
+                )
+            },
+        )
+    }
+
+    val connectResult = connectSetup.copy(report = ConnectionTestAnalyzer.analyze(connectResults))
+
+    val connectAllGood = connectSetup.copy(
+        report = ConnectionTestAnalyzer.analyze(connectResults.map { r -> r.copy(trials = List(3) { trial(r.target.bssid, 2.0 + it * 0.2) }) }),
+    )
+
+    val connectRunning = connectSetup.copy(
+        running = true,
+        progress = ConnectTestProgress(
+            "Connecting to 5 GHz ch 36, attempt 2 of 3",
+            done = 4,
+            total = connectResults.size * 3,
+            results = connectResults.mapIndexed { index, r ->
+                when (index) {
+                    0 -> r
+                    1 -> r.copy(trials = r.trials.take(1))
+                    else -> r.copy(trials = emptyList())
+                }
+            },
+        ),
+    )
+
+    /** The phone's own behaviour: one failed join on 5 GHz, a retry that worked, later a drop. */
+    private val watchEvents = run {
+        var t = NOW - 26 * 60_000L
+        fun at(seconds: Double, kind: WifiEventKind, value: String = "", bssid: String? = null, rssi: Int? = null): WifiEvent {
+            t += (seconds * 1000).toLong()
+            return WifiEvent(t, kind, value, if (bssid != null) "Home" else null, bssid, rssi, null)
+        }
+        listOf(
+            at(0.0, WifiEventKind.LINK_UP, "Already connected when watching started", "a4:11:22:33:44:50", -46),
+            at(412.0, WifiEventKind.SUPPLICANT, "DISCONNECTED", rssi = -49),
+            at(0.1, WifiEventKind.LINK_DOWN, rssi = -49),
+            at(1.2, WifiEventKind.SUPPLICANT, "ASSOCIATING"),
+            at(4.0, WifiEventKind.SUPPLICANT, "DISCONNECTED"),
+            at(2.5, WifiEventKind.SUPPLICANT, "ASSOCIATING"),
+            at(4.0, WifiEventKind.SUPPLICANT, "DISCONNECTED"),
+            at(6.0, WifiEventKind.SUPPLICANT, "ASSOCIATING"),
+            at(0.3, WifiEventKind.SUPPLICANT, "ASSOCIATED"),
+            at(0.1, WifiEventKind.SUPPLICANT, "FOUR_WAY_HANDSHAKE"),
+            at(0.2, WifiEventKind.SUPPLICANT, "COMPLETED", "a4:11:22:33:44:50", -45),
+            at(0.1, WifiEventKind.NETWORK, "OBTAINING_IPADDR"),
+            at(1.1, WifiEventKind.NETWORK, "CONNECTED", "a4:11:22:33:44:50", -45),
+            at(0.3, WifiEventKind.LINK_UP, "", "a4:11:22:33:44:50", -45),
+        )
+    }
+
+    val watchQuiet = WatchUiState()
+    val watchBusy = WatchUiState(WatchAnalyzer.analyze(watchEvents), watchEvents.asReversed(), watchEvents.size, background = true)
 }
