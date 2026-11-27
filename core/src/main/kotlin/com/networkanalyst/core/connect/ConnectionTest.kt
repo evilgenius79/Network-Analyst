@@ -143,7 +143,10 @@ object ConnectionTestAnalyzer {
                     " Asked directly, the network takes this phone without trouble at this spot and moment.",
                 listOf(
                     "If \"Connection failed\" still appears, run this test again right when it happens, and leave the connection watch on to catch it.",
-                    "This test connects with fresh settings. If only the saved network fails, forget the network on the phone and join it again, or reset the phone's Wi-Fi settings.",
+                    "This test joins through a fresh network entry and normally with a randomized hardware (MAC) address, not through the saved network and the address that one uses. " +
+                        "If the test always passes while normal connecting fails, the cause lies in one of those two differences: forget the network on the phone and join it again, " +
+                        "and try the other MAC address type in that network's settings on the phone.",
+                    "If changing the MAC address type cures it, the router is treating the phone's own address differently. Look for the phone in the router's app: blocked, paused, in a restricted profile, or listed twice.",
                 ),
             )
             return ConnectionTestReport(results, findings, "The network accepts this phone at every access point tested.", stoppedBy)

@@ -202,4 +202,13 @@ class ConnectionTestAnalyzerTest {
         assertEquals(null, ConnectionTestAnalyzer.analyze(listOf(result(ap5, failed(ap5, ConnectFailure.ASSOCIATION)))).stoppedBy)
         assertTrue(ConnectFailure.entries.filter { !it.countsAsTest } == listOf(ConnectFailure.DECLINED, ConnectFailure.REJECTED))
     }
+
+    @Test
+    fun `a clean result points at what the test does differently from normal connecting`() {
+        // The test uses its own network entry and normally a randomized address; when it passes
+        // but everyday connecting fails, those two differences are where to look.
+        val fixes = ConnectionTestAnalyzer.analyze(listOf(result(ap24, ok(ap24), ok(ap24)))).findings.single().fixes
+        assertTrue(fixes.any { it.contains("randomized hardware (MAC) address") && it.contains("forget the network") })
+        assertTrue(fixes.any { it.contains("blocked, paused") })
+    }
 }

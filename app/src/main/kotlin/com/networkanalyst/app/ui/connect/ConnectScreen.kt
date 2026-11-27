@@ -291,7 +291,8 @@ private fun TestSetup(state: ConnectUiState, scanning: Boolean, actions: Connect
                     "Wi-Fi drops off the network while the test runs and normally rejoins by itself afterwards. "
                 },
             )
-            append("Android asks once for permission to connect. Keep the app open until it finishes.")
+            append("Android asks once for permission to connect. Keep the app open until it finishes. ")
+            append("The router may list the test as a separate device, because Android normally gives it a randomized hardware address.")
         },
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,

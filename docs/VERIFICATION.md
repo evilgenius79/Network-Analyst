@@ -76,7 +76,7 @@ then run `./gradlew :core:test -PdaemonHost=<that interface's address> --tests '
 The connection test is built on `WifiNetworkSpecifier`. Its documented behaviour was read
 from the Android developer reference; the details below are not in the documentation and
 were read from the Wi-Fi module's source (`WifiNetworkFactory.java`, `WifiConfiguration.java`,
-`WifiNetworkSpecifier.java`, `WifiManager.java`) in LineageOS's copy of AOSP
+`WifiNetworkSpecifier.java`, `WifiManager.java`, `ClientModeImpl.java`) in LineageOS's copy of AOSP
 `packages/modules/Wifi`, branch `lineage-23.0`, because the AOSP host was not reachable.
 
 | Behaviour the app relies on | Where it was read |
@@ -85,6 +85,7 @@ were read from the Wi-Fi module's source (`WifiNetworkFactory.java`, `WifiConfig
 | A failed connection is retried up to three more times before failure is reported, except for a wrong password, which is not retried. | `USER_SELECTED_NETWORK_CONNECT_RETRY_MAX`, `handleNetworkConnectionFailure` |
 | The user's approval is remembered per app. For password-protected networks a later request for any access point with the same name and security type skips the dialog; for open networks only the exact access point approved before does. | `isAccessPointApprovedInInternalApprovalList` |
 | The connection is made through a temporary network entry of the app's own, pinned to the requested access point and separate from the phone's saved network of the same name, so the test uses the password typed in and leaves the saved network alone. The entry is removed when the request is released. | `handleConnectToNetworkUserSelectionInternal` (`ephemeral`, `shared = false`, `fromWifiNetworkSpecifier`, `BSSID`), `WifiConfiguration.getProfileKey`, `disconnectAndRemoveNetworkFromWifiConfigManager` |
+| The test connection normally uses a randomized hardware address, whatever the saved network is set to: the request API has no setting for it, the entry is created with the default (automatic), and any setting other than "none" is randomized when the phone has MAC randomization switched on. | `WifiNetworkSpecifier.Builder` (no such setter), `WifiConfiguration.macRandomizationSetting`, and the connect path in `ClientModeImpl` (`configureRandomizedMacAddress` unless `RANDOMIZATION_NONE`) |
 | Requesting one band is not implemented, so radios are targeted by address instead. | `TODO(b/188021807)` in `handleConnectToNetworkUserSelectionInternal` |
 | While it waits for approval or looks for the access point, scanning pauses when the screen turns off, so the app keeps the screen on during the test. | `handleScreenStateChanged` |
 | Normal automatic joining is switched back on when the request ends. | `removeClientModeManagerIfNecessary` |

@@ -91,6 +91,11 @@ Things to know about the test:
   itself afterwards. The test connection carries no internet traffic.
 - Keep the app on screen until it finishes. Android only accepts these requests from the app
   in front; if it is not, the test stops and says so.
+- The test joins through a temporary network entry of its own and normally with a randomized
+  hardware (MAC) address; an app cannot choose. The router may therefore list it as a separate
+  device. It also means the test is not identical to everyday connecting: if the test passes
+  everywhere while the phone still fails to connect, look at the saved network and at how the
+  router treats the phone's own address. The result says so.
 - The password is held in memory for the test only. It is never written to storage.
 - Networks that sign in with a user name (802.1X) or use WEP cannot be tested: Android does
   not let apps request those.
