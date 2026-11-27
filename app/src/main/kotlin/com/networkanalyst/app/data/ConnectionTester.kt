@@ -202,24 +202,30 @@ class ConnectionTester(
 
             if (available == true) {
                 // Snapshot before releasing: the disconnect that release causes is not a failure.
-                val result = TrialOutcome.success(monitor.since(startedAt), target.bssid)
+                val events = monitor.since(startedAt)
+                val result = TrialOutcome.success(events, target.bssid)
+                val waitMs = TrialOutcome.waitBeforeFirstTry(events, startedAt, target.bssid)
                 delay(HOLD_MS)
-                return ConnectTrial(target.bssid, success = true, durationMs = elapsedMs, hiddenFailures = result.hiddenFailures)
+                return ConnectTrial(target.bssid, success = true, durationMs = elapsedMs, waitMs = waitMs, hiddenFailures = result.hiddenFailures)
             }
             // The stage arrives through a separate callback; give it a moment to land.
             if (reportsStage) {
                 withTimeoutOrNull(STAGE_WAIT_MS) { while (reported.get() == null) delay(25) }
             }
+            val events = monitor.since(startedAt)
             val result = TrialOutcome.failure(
                 reported = reported.get(),
                 timedOut = available == null || elapsedMs >= timeoutMs,
-                windowEvents = monitor.since(startedAt),
+                windowEvents = events,
                 approvalExpected = approvalPending,
                 stageReporting = reportsStage,
                 elapsedMs = elapsedMs,
                 targetBssid = target.bssid,
             )
-            return ConnectTrial(target.bssid, success = false, failure = result.failure, durationMs = elapsedMs, hiddenFailures = result.hiddenFailures)
+            return ConnectTrial(
+                target.bssid, success = false, failure = result.failure, durationMs = elapsedMs,
+                waitMs = TrialOutcome.waitBeforeFirstTry(events, startedAt, target.bssid), hiddenFailures = result.hiddenFailures,
+            )
         } finally {
             withContext(NonCancellable) {
                 if (registered) {

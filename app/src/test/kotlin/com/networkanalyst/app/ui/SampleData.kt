@@ -188,8 +188,8 @@ object SampleData {
 
     /** A three-unit mesh, each unit with a 2.4 GHz and a 5 GHz radio, plus the neighbours. */
     private val meshAccessPoints = listOf(
-        ap("Home", "a4:11:22:33:44:51", -47, 5180, 80, connected = true),
-        ap("Home", "a4:11:22:33:44:50", -44, 2437),
+        ap("Home", "a4:11:22:33:44:51", -47, 5180, 160, standard = WifiStandard.BE, connected = true).copy(multiLink = true),
+        ap("Home", "a4:11:22:33:44:50", -44, 2437, standard = WifiStandard.BE).copy(multiLink = true),
         ap("Home", "a4:11:22:33:55:61", -63, 5745, 80),
         ap("Home", "a4:11:22:33:55:60", -60, 2412),
         ap("Home", "a4:11:22:33:66:71", -84, 5500, 80),
@@ -235,6 +235,23 @@ object SampleData {
     }
 
     val connectResult = connectSetup.copy(report = ConnectionTestAnalyzer.analyze(connectResults))
+
+    /** One 5 GHz radio lets the phone in and cuts it off at once; the other three are clean. */
+    val connectDropped = connectSetup.copy(
+        report = ConnectionTestAnalyzer.analyze(
+            home.targets.filter { it.bssid.startsWith("a4:11:22:33:44") || it.bssid.startsWith("a4:11:22:33:55") }.map { target ->
+                val b = target.bssid
+                TargetResult(
+                    target,
+                    when (b) {
+                        "a4:11:22:33:44:51" -> List(3) { failed(b, ConnectFailure.DROPPED, 1.4, FailedStage.DROPPED, FailedStage.DROPPED, FailedStage.DROPPED).copy(waitMs = 300) }
+                        "a4:11:22:33:55:60" -> listOf(trial(b, 35.0).copy(waitMs = 34_000), trial(b, 1.1).copy(waitMs = 300), trial(b, 3.7).copy(waitMs = 2_700))
+                        else -> List(3) { trial(b, 0.9 + it * 0.1).copy(waitMs = 300) }
+                    },
+                )
+            },
+        ),
+    )
 
     /** Both radios of the nearest unit give trouble; the unit down the hall is clean. */
     val connectOneUnit = connectSetup.copy(

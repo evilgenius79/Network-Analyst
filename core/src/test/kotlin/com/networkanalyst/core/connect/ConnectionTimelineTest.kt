@@ -228,4 +228,23 @@ class ConnectionTimelineTest {
         val same = ConnectionTimeline.summarize(listOf(at(0, "AUTHENTICATING", "a4:11:22:33:45:87"), at(200, "ASSOCIATING", "a4:11:22:33:45:87"), at(900, "DISCONNECTED", null)))
         assertEquals(1, same.attempts.size)
     }
+
+    @Test
+    fun `being cut off right after joining is told apart from a key exchange that failed`() {
+        fun s(ms: Long, state: String) = WifiEvent(ms, WifiEventKind.SUPPLICANT, state)
+        fun stage(vararg events: WifiEvent) = ConnectionTimeline.summarize(events.toList()).failures.single()
+
+        val dropped = stage(s(0, "ASSOCIATING"), s(150, "ASSOCIATED"), s(190, "DISCONNECTED"))
+        assertEquals(FailedStage.DROPPED, dropped.failedAt)
+        assertEquals(40L, dropped.droppedAfterMs)
+
+        // The handshake began and then failed: that is a key exchange failure, however quick.
+        assertEquals(FailedStage.KEY_EXCHANGE, stage(s(0, "ASSOCIATING"), s(150, "ASSOCIATED"), s(170, "FOUR_WAY_HANDSHAKE"), s(400, "DISCONNECTED")).failedAt)
+        // Accepted, then silence until the phone gave up seconds later: the exchange never completed.
+        val silent = stage(s(0, "ASSOCIATING"), s(150, "ASSOCIATED"), s(4_150, "DISCONNECTED"))
+        assertEquals(FailedStage.KEY_EXCHANGE, silent.failedAt)
+        assertEquals(null, silent.droppedAfterMs)
+        // Never accepted at all is still a refusal.
+        assertEquals(FailedStage.JOINING, stage(s(0, "ASSOCIATING"), s(900, "DISCONNECTED")).failedAt)
+    }
 }

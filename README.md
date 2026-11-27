@@ -22,7 +22,8 @@ band, and a connection watch records every step the phone's own Wi-Fi takes.
 > **Status:** everything here builds, passes its tests and has been checked against real
 > servers, real protocol implementations and Android's own source code (see
 > [docs/VERIFICATION.md](docs/VERIFICATION.md)). The connection test has been run on two real
-> phones, a Samsung Galaxy A17 5G and a Motorola, and worked from start to finish on both.
+> phones, a Samsung Galaxy A17 5G and a Motorola, and worked from start to finish on both; a
+> log from the Samsung is kept as a test case.
 > The other parts have **not yet been confirmed on a physical phone**. The screenshots are
 > rendered from sample data. Expect device-specific rough edges.
 
@@ -63,9 +64,13 @@ each access point radio in range separately, several times each. A mesh has one 
 band per unit, and the phone normally picks among them by itself, which is why such a fault
 comes and goes. The result shows, per radio:
 
-- how many requests connected, and how long connecting took;
-- for a failure, the step it stopped at: the access point refusing the phone, the encryption
-  key exchange, or getting an IP address;
+- how many requests connected, and how long connecting took once the phone started trying
+  (time Android spent looking for the radio first is shown separately);
+- for a failure, the step it stopped at: the access point refusing the phone, the access
+  point letting it in and dropping it at once, the encryption key exchange, or getting an IP
+  address;
+- what the radio says about itself (Wi-Fi generation, channel width, multi-link, security),
+  so a radio that fails can be compared with ones that work;
 - how many times Android **retried silently** before reporting the outcome. Android retries a
   requested connection up to three times before it admits failure, so a radio that "connected"
   may have refused the phone twice first.

@@ -139,4 +139,19 @@ class TrialOutcomeTest {
         // Capital letters in an address make no difference.
         assertEquals(1, TrialOutcome.success(events, target.uppercase()).hiddenFailures!!.size)
     }
+
+    @Test
+    fun `time spent finding the access point is measured apart from joining it`() {
+        val target = "a4:11:22:33:45:86"
+        fun at(ms: Long, state: String, bssid: String?) = WifiEvent(ms, WifiEventKind.SUPPLICANT, state, bssid = bssid)
+        // Android took 34 s to find the radio; once it tried, the phone was in within a second.
+        val events = listOf(at(1_000, "DISCONNECTED", null), at(35_000, "ASSOCIATING", target), at(35_150, "ASSOCIATED", target), at(35_300, "COMPLETED", target))
+        assertEquals(34_000L, TrialOutcome.waitBeforeFirstTry(events, requestedAtMs = 1_000, targetBssid = target))
+        // A try the phone made elsewhere first does not count as the start.
+        val detour = listOf(at(1_200, "ASSOCIATING", "c0:22:33:44:9a:e7")) + events
+        assertEquals(34_000L, TrialOutcome.waitBeforeFirstTry(detour, 1_000, target))
+        // Nothing visible, nothing claimed.
+        assertNull(TrialOutcome.waitBeforeFirstTry(emptyList(), 1_000, target))
+        assertNull(TrialOutcome.waitBeforeFirstTry(listOf(WifiEvent(2_000, WifiEventKind.NETWORK, "CONNECTING")), 1_000, target))
+    }
 }

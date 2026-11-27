@@ -2,6 +2,7 @@ package com.networkanalyst.core.connect
 
 import com.networkanalyst.core.model.AccessPoint
 import com.networkanalyst.core.model.WifiSecurity
+import com.networkanalyst.core.model.WifiStandard
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -93,5 +94,20 @@ class TargetPickerTest {
         val allWeak = listOf(TestTarget("Home", "02", 2437, -84), TestTarget("Home", "03", 5745, -90))
         assertEquals(setOf("02"), TargetPicker.defaultSelection(allWeak))
         assertEquals(emptySet<String>(), TargetPicker.defaultSelection(emptyList()))
+    }
+
+    @Test
+    fun `what each radio says about itself is carried along for comparison`() {
+        val caps = "[WPA2-PSK-CCMP][RSN-PSK-CCMP][ESS]"
+        val home = TargetPicker.networks(
+            listOf(
+                AccessPoint("Home", "aa:bb:cc:00:00:01", -50, 5560, channelWidthMhz = 160, standard = WifiStandard.BE, security = WifiSecurity.WPA2, capabilities = caps, multiLink = true),
+                AccessPoint("Home", "aa:bb:cc:00:00:09", -60, 5560, channelWidthMhz = 80, standard = WifiStandard.AX, security = WifiSecurity.WPA2, capabilities = caps),
+                AccessPoint("Home", "aa:bb:cc:00:00:0f", -70, 2437, security = WifiSecurity.WPA2),
+            ),
+        ).single()
+        assertEquals(listOf("Wi-Fi 7 · 160 MHz wide · multi-link", "Wi-Fi 6 · 80 MHz wide", "20 MHz wide"), home.targets.map { it.traits })
+        assertEquals(caps, home.targets.first().capabilities)
+        assertEquals("", TestTarget("Home", "aa:bb:cc:00:00:01", 5560, -50).traits)
     }
 }

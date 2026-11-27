@@ -15,12 +15,30 @@ a two-unit mesh, and sent the result screens. That is the only part run on hardw
 
 The two results also confirmed, for that mesh, the assumption behind grouping radios into
 boxes: each unit's 2.4 GHz and 5 GHz radio had addresses one apart, and the two units had
-unrelated prefixes. And they showed the test doing its job: one phone was turned away by both
-radios of one unit while the other phone joined the same radios without trouble.
+unrelated prefixes. And they showed the test doing its job: one phone was turned away by a
+radio that the other phone joined without trouble from the same spot.
 
-Not yet seen on a phone: anything added in 1.2.0 (naming the access point of a failed attempt,
-the one-box conclusion on a real result), the connection watch over a longer period, the
-background service, and every other tab.
+The owner then ran version 1.2.0 on the Galaxy A17 5G and shared the full log (four test runs
+and some everyday use). It showed:
+
+- Every connection step now carries the name, address and channel of the access point being
+  tried, so that part of 1.2.0 works on Samsung's Wi-Fi software.
+- One radio accepted the phone and cut the link 24 to 55 ms later, before the key exchange
+  began, on 12 of 12 tries, while three other radios let it in on 9 of 9. The same pattern
+  runs through the earlier runs: 43 such tries in all. The app called this a failed key
+  exchange, which is not what happened; 1.3.0 names it as being dropped right after joining.
+- The time shown as "to connect" included up to 34 s that Android spent looking for a radio
+  before its first try, which made one radio look slow when it was not. 1.3.0 measures the
+  two apart.
+- A signal reading of 0 dBm was logged just after connecting (no reading yet). 1.3.0 leaves
+  such readings out.
+
+That log, with network names, addresses and the date replaced and the timing untouched, is
+kept as `core/src/test/resources/real-run-galaxy-a17.log`, and `RealPhoneLogTest` checks the
+analysis against it.
+
+Not yet seen on a phone: what 1.3.0 adds on screen (the radio details, the new step name),
+the connection watch over a longer period, the background service, and every other tab.
 
 ## Not verified
 
@@ -49,6 +67,10 @@ background service, and every other tab.
   five bytes, lie within eight of each other in the last, and are on different channels. That
   is how makers usually number them, and it held for the one mesh seen so far, but it is a
   convention, not a rule.
+- **The one-second rule for "dropped".** A link cut within one second of the access point
+  accepting the phone, with no key exchange step seen, is called dropped; later than that it
+  is called a key exchange that did not complete. On the one phone seen, drops came within a
+  tenth of a second, so the margin is wide, but the figure is a judgement.
 - **The 400 ms rule.** A request that ends in under 400 ms with no attempt seen is taken to
   have been refused outright by Android (which it does when the app is not on screen). The
   figure is a judgement: faster than a person can answer a dialog or a scan can complete.

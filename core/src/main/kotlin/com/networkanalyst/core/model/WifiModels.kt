@@ -50,6 +50,10 @@ data class AccessPoint(
     val security: WifiSecurity = WifiSecurity.UNKNOWN,
     /** True when this is the radio the phone is currently connected to. */
     val isConnected: Boolean = false,
+    /** Android's raw description of security and features, e.g. "[WPA2-PSK-CCMP][RSN-PSK-CCMP][ESS]". */
+    val capabilities: String? = null,
+    /** True when the radio is one link of a Wi-Fi 7 multi-link access point. */
+    val multiLink: Boolean = false,
 )
 
 /** The phone's current Wi-Fi association. */

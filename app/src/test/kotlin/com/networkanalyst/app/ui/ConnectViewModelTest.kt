@@ -78,6 +78,8 @@ class ConnectViewModelTest {
         assertEquals(listOf("Neighbour", "Home", "Cafe"), state.networks.map { it.ssid })
         assertEquals("Neighbour", state.ssid)
         assertEquals(WifiSecurity.WPA2, state.networks[1].security)
+        // What each radio says about itself comes along, for comparing a failing radio with the rest.
+        assertEquals("[WPA2-PSK-CCMP][RSN-PSK-CCMP][ESS]", state.networks[1].targets.first().capabilities)
         assertEquals(WifiSecurity.OPEN, state.networks[2].security)
         assertEquals(setOf("10:00:00:00:00:01"), state.selected)
         assertTrue(state.supported)

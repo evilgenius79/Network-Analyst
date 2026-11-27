@@ -48,7 +48,9 @@ object TargetPicker {
                 TestNetwork(
                     ssid = ssid,
                     security = security,
-                    targets = unique.map { TestTarget(ssid, it.bssid.lowercase(), it.frequencyMhz, it.rssiDbm) },
+                    targets = unique.map {
+                        TestTarget(ssid, it.bssid.lowercase(), it.frequencyMhz, it.rssiDbm, it.standard, it.channelWidthMhz, it.multiLink, it.capabilities)
+                    },
                     connected = ssid == connectedSsid || radios.any { it.isConnected },
                 )
             }

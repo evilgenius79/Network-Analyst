@@ -47,12 +47,23 @@ data class WifiEvent(
  * Where a connection attempt stopped. Joining a protected Wi-Fi network happens in this order:
  * the access point accepts the phone (association), both sides derive encryption keys from the
  * password (key exchange), and the phone is given an IP address.
+ *
+ * [DROPPED] sits between the first two: accepted, then cut off before the key exchange began.
+ * A real phone showed it, and it means something different from a key exchange that was
+ * tried and failed.
  */
 enum class FailedStage(val label: String, val explanation: String, /** A few words, for lists. */ val brief: String) {
     JOINING(
         "Joining the access point",
         "The access point did not accept the phone. It was out of reach, busy, at its device limit, or deliberately ignoring the phone to push it to another access point or band.",
         "refused when joining",
+    ),
+    DROPPED(
+        "Dropped right after joining",
+        "The access point accepted the phone and the link was cut a moment later, before any encryption keys were exchanged. " +
+            "That is not a wrong password or a weak signal, which fail slowly. It is what it looks like when an access point pushes a device away " +
+            "on purpose (client steering, a block or pause, a device limit), or when the phone's own Wi-Fi rejects something in the access point's answer.",
+        "dropped right after joining",
     ),
     KEY_EXCHANGE(
         "Exchanging encryption keys",

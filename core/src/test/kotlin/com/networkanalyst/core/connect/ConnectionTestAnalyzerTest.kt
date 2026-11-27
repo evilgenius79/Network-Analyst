@@ -95,7 +95,7 @@ class ConnectionTestAnalyzerTest {
         assertEquals("not dead, so a warning rather than critical", Severity.WARNING, finding.severity)
         assertTrue(finding.detail.contains("2 of 3 access point radios connected cleanly"))
         assertTrue(finding.detail.contains("-74 dBm"))
-        assertEquals("The trouble is tied to specific access points.", report.headline)
+        assertEquals("One access point radio gives trouble.", report.headline)
     }
 
     @Test
@@ -267,5 +267,45 @@ class ConnectionTestAnalyzerTest {
         assertEquals("3 silent retries (2 refused when joining, 1 key exchange failed)", result.hiddenFailureSummary)
         assertEquals(null, TargetResult(ap5, listOf(ConnectTrial(ap5.bssid, true, durationMs = 900, hiddenFailures = emptyList()))).hiddenFailureSummary)
         assertEquals(null, TargetResult(ap5, listOf(ConnectTrial(ap5.bssid, true, durationMs = 900, hiddenFailures = null))).hiddenFailureSummary)
+    }
+
+    @Test
+    fun `a radio that lets the phone in and drops it gets its own finding and advice`() {
+        val good = TestTarget("Home", "c0:22:33:44:9a:e7", 5560, -61)
+        val bad = TestTarget("Home", "a4:11:22:33:45:87", 5560, -64)
+        val report = ConnectionTestAnalyzer.analyze(
+            listOf(
+                TargetResult(good, List(3) { ConnectTrial(good.bssid, true, durationMs = 600, hiddenFailures = emptyList()) }),
+                TargetResult(bad, List(3) { ConnectTrial(bad.bssid, false, ConnectFailure.DROPPED, durationMs = 1500, hiddenFailures = List(3) { FailedStage.DROPPED }) }),
+            ),
+        )
+        val dropped = report.findings.first { it.id == "connect.dropped" }
+        assertEquals("The phone is let in, then dropped at once", dropped.title)
+        assertTrue(dropped.detail.startsWith("12 tries at 5 GHz ch 112 (a4:11:22:33:45:87, -64 dBm) went the same way: the access point accepted the phone and the link was cut a moment later"))
+        assertTrue(dropped.fixes.first().contains("client steering"))
+        // It is not a password problem, so the key-exchange advice must stay out of it.
+        assertTrue(report.findings.none { it.id == "connect.keys_sometimes" })
+        assertTrue(report.findings.first { it.id == "connect.retries" }.detail.contains("9 stopped at \"Dropped right after joining\""))
+
+        val everywhere = ConnectionTestAnalyzer.analyze(listOf(TargetResult(bad, List(2) { ConnectTrial(bad.bssid, false, ConnectFailure.DROPPED, durationMs = 1500, hiddenFailures = emptyList()) })))
+        assertEquals("Every access point drops the phone right after letting it join.", everywhere.headline)
+    }
+
+    @Test
+    fun `connect time leaves out the time android spent looking for the radio`() {
+        val result = TargetResult(
+            ap24,
+            listOf(
+                ConnectTrial(ap24.bssid, true, durationMs = 35_000, waitMs = 34_000, hiddenFailures = emptyList()),
+                ConnectTrial(ap24.bssid, true, durationMs = 900, waitMs = 300, hiddenFailures = emptyList()),
+                ConnectTrial(ap24.bssid, true, durationMs = 3_700, waitMs = 2_700, hiddenFailures = emptyList()),
+            ),
+        )
+        assertEquals(1_000.0, result.medianConnectMs!!, 0.0)
+        assertEquals(2_700.0, result.medianWaitMs!!, 0.0)
+        // On a phone that shows no steps the whole time is all there is.
+        val blind = TargetResult(ap24, listOf(ConnectTrial(ap24.bssid, true, durationMs = 2_000, hiddenFailures = null)))
+        assertEquals(2_000.0, blind.medianConnectMs!!, 0.0)
+        assertEquals(null, blind.medianWaitMs)
     }
 }

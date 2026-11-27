@@ -18,6 +18,8 @@ data class ObservedAttempt(
     val bssid: String? = null,
     /** True for a move between access points while already connected. */
     val roam: Boolean = false,
+    /** For an attempt cut off after the access point accepted the phone: how long after. */
+    val droppedAfterMs: Long? = null,
 ) {
     val durationMs: Long get() = (endMs - startMs).coerceAtLeast(0)
 }
@@ -65,12 +67,20 @@ object ConnectionTimeline {
     /** An attempt that has gone quiet for this long was abandoned without the phone saying so. */
     private const val STALE_MS = 30_000L
 
+    /**
+     * A link cut this soon after the access point accepted the phone was dropped, not timed
+     * out: the key exchange normally starts within tens of milliseconds and takes seconds to
+     * give up when it fails.
+     */
+    const val DROP_WINDOW_MS = 1_000L
+
     private class Open(val startMs: Long, var roam: Boolean) {
         var progress = Progress.STARTED
         var sawSupplicant = false
         var authError: String? = null
         var lastMs = startMs
         var bssid: String? = null
+        var associatedAtMs: Long? = null
     }
 
     /**
@@ -88,12 +98,18 @@ object ConnectionTimeline {
         var inTest = false
 
         fun fail(attempt: Open, atMs: Long) {
+            val sinceAccepted = attempt.associatedAtMs?.let { atMs - it }
+            val dropped = attempt.progress == Progress.ASSOCIATED && sinceAccepted != null && sinceAccepted < DROP_WINDOW_MS
             val stage = when (attempt.progress) {
                 Progress.STARTED -> if (attempt.sawSupplicant) FailedStage.JOINING else FailedStage.BEFORE_IP_ADDRESS
-                Progress.ASSOCIATED, Progress.KEY_EXCHANGE -> FailedStage.KEY_EXCHANGE
+                Progress.ASSOCIATED -> if (dropped) FailedStage.DROPPED else FailedStage.KEY_EXCHANGE
+                Progress.KEY_EXCHANGE -> FailedStage.KEY_EXCHANGE
                 Progress.KEYS_DONE, Progress.ADDRESS -> FailedStage.IP_ADDRESS
             }
-            attempts += ObservedAttempt(attempt.startMs, atMs, success = false, failedAt = stage, authError = attempt.authError, bssid = attempt.bssid, roam = attempt.roam)
+            attempts += ObservedAttempt(
+                attempt.startMs, atMs, success = false, failedAt = stage, authError = attempt.authError, bssid = attempt.bssid, roam = attempt.roam,
+                droppedAfterMs = sinceAccepted.takeIf { dropped },
+            )
         }
 
         fun succeed(attempt: Open, atMs: Long, bssid: String?) {
@@ -164,6 +180,7 @@ object ConnectionTimeline {
                                 else -> Progress.KEY_EXCHANGE
                             }
                             if (reached > attempt.progress) attempt.progress = reached
+                            if (state == "ASSOCIATED" && attempt.associatedAtMs == null) attempt.associatedAtMs = event.timeMs
                             // A roam keeps its IP address, so finishing the key exchange completes it.
                             if (state == "COMPLETED" && attempt.roam) {
                                 succeed(attempt, event.timeMs, event.bssid)

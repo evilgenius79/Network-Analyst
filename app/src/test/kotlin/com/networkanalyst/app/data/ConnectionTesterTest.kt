@@ -263,6 +263,37 @@ class ConnectionTesterTest {
     }
 
     @Test
+    fun `a radio that accepts the phone and cuts it off at once is reported as dropped`() {
+        // The pattern a real phone logged: accepted, then disconnected within tens of
+        // milliseconds, four times over, and a failure reported with no stage.
+        val progress = CopyOnWriteArrayList<ConnectTestProgress>()
+        val seen = HashSet<NetworkCallback>()
+        val run = start(listOf(ap5), trials = 1, progress)
+
+        val request = awaitRequest(seen)
+        Thread.sleep(300)
+        repeat(4) {
+            step("ASSOCIATING", bssid = ap5.bssid)
+            step("ASSOCIATED", bssid = ap5.bssid)
+            step("DISCONNECTED")
+        }
+        shadowOf(wifiManager).triggerLocalConnectionFailure(
+            WifiNetworkSpecifier.Builder().setSsid("Home").build(),
+            WifiManager.STATUS_LOCAL_ONLY_CONNECTION_FAILURE_UNKNOWN,
+        )
+        request.onUnavailable()
+
+        val result = run.get(30, TimeUnit.SECONDS).single()
+        val trial = result.trials.single()
+        assertEquals(ConnectFailure.DROPPED, trial.failure)
+        assertEquals(List(3) { FailedStage.DROPPED }, trial.hiddenFailures)
+        assertTrue("the wait before the first try is measured", trial.waitMs!! in 250..5_000)
+        assertEquals("3 silent retries (3 dropped right after joining)", result.hiddenFailureSummary)
+        // With only this radio tested, that is the whole verdict.
+        assertEquals("Every access point drops the phone right after letting it join.", ConnectionTestAnalyzer.analyze(listOf(result)).headline)
+    }
+
+    @Test
     fun `stopping midway releases the request and closes the test window`() {
         val seen = HashSet<NetworkCallback>()
         runBlocking {

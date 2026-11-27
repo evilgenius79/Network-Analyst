@@ -122,8 +122,8 @@ class WifiEventMonitor(
     private fun baseline(): WifiEvent {
         val link = runCatching { wifi.currentLink() }.getOrNull()
         return if (link != null) {
-            lastRssi = link.rssiDbm
-            WifiEvent(now(), WifiEventKind.LINK_UP, "Already connected when watching started", link.ssid, link.bssid, link.rssiDbm, link.frequencyMhz)
+            link.rssiDbm.realReading()?.let { lastRssi = it }
+            WifiEvent(now(), WifiEventKind.LINK_UP, "Already connected when watching started", link.ssid, link.bssid, link.rssiDbm.realReading(), link.frequencyMhz)
         } else {
             WifiEvent(now(), WifiEventKind.NOTE, "Watching started; Wi-Fi is not connected")
         }
@@ -135,8 +135,8 @@ class WifiEventMonitor(
             scope.launch {
                 delay(300)
                 val link = runCatching { wifi.currentLink() }.getOrNull()
-                link?.rssiDbm?.let { lastRssi = it }
-                record(WifiEvent(now(), WifiEventKind.LINK_UP, "", link?.ssid, link?.bssid, link?.rssiDbm, link?.frequencyMhz))
+                link?.rssiDbm.realReading()?.let { lastRssi = it }
+                record(WifiEvent(now(), WifiEventKind.LINK_UP, "", link?.ssid, link?.bssid, link?.rssiDbm.realReading(), link?.frequencyMhz))
             }
         } else {
             record(WifiEvent(now(), WifiEventKind.LINK_DOWN, "", rssiDbm = lastRssi))
@@ -171,7 +171,7 @@ class WifiEventMonitor(
                 @Suppress("DEPRECATION")
                 val connected = state == NetworkInfo.DetailedState.CONNECTED
                 val link = if (connected) runCatching { wifi.currentLink() }.getOrNull() else null
-                record(WifiEvent(now(), WifiEventKind.NETWORK, state.name, link?.ssid, link?.bssid, link?.rssiDbm, link?.frequencyMhz))
+                record(WifiEvent(now(), WifiEventKind.NETWORK, state.name, link?.ssid, link?.bssid, link?.rssiDbm.realReading(), link?.frequencyMhz))
             }
             WifiManager.WIFI_STATE_CHANGED_ACTION -> when (intent.getIntExtra(WifiManager.EXTRA_WIFI_STATE, WifiManager.WIFI_STATE_UNKNOWN)) {
                 WifiManager.WIFI_STATE_ENABLED -> record(WifiEvent(now(), WifiEventKind.WIFI_SWITCH, "on"))
@@ -179,6 +179,12 @@ class WifiEventMonitor(
             }
         }
     }
+
+    /**
+     * A real phone logged "0 dBm" just after connecting: the signal had not been measured yet.
+     * Zero and the framework's -127 both mean "no reading" and are left out.
+     */
+    private fun Int?.realReading(): Int? = this?.takeIf { it in -126..-1 }
 
     companion object {
         /** The states in which Android's Wi-Fi status carries the access point being joined. */

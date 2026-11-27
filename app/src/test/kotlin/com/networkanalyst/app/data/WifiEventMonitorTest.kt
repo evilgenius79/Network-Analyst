@@ -176,6 +176,8 @@ class WifiEventMonitorTest {
         // The platform adds the quotes around a network name itself.
         shadowOf(joining).setSSID("Home")
         shadowOf(joining).setFrequency(5560)
+        // Not measured yet at this point; a real phone reported 0 here.
+        shadowOf(joining).setRssi(0)
         shadowOf(wifiManager).setConnectionInfo(joining)
         monitor.handle(supplicant(SupplicantState.ASSOCIATING))
 
@@ -187,6 +189,7 @@ class WifiEventMonitorTest {
         assertEquals("a4:11:22:33:45:87", trying.bssid)
         assertEquals("Home", trying.ssid)
         assertEquals(5560, trying.frequencyMhz)
+        assertEquals("zero is no reading, not a signal level", null, trying.rssiDbm)
         assertEquals(null, ended.bssid)
 
         val failed = ConnectionTimeline.summarize(monitor.events.value).failures.single()

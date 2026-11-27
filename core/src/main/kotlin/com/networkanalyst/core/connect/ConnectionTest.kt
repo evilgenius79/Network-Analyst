@@ -4,6 +4,7 @@ import com.networkanalyst.core.analysis.Category
 import com.networkanalyst.core.analysis.Finding
 import com.networkanalyst.core.analysis.Severity
 import com.networkanalyst.core.model.WifiBand
+import com.networkanalyst.core.model.WifiStandard
 import com.networkanalyst.core.util.Stats
 import com.networkanalyst.core.wifi.WifiChannels
 import kotlinx.serialization.Serializable
@@ -19,6 +20,7 @@ enum class ConnectFailure(val label: String, val explanation: String) {
         "The access point was in range but did not answer. Its signal may be too weak here, or it may be ignoring this phone to steer it to another access point.",
     ),
     ASSOCIATION("Refused when joining", FailedStage.JOINING.explanation),
+    DROPPED("Dropped right after joining", FailedStage.DROPPED.explanation),
     AUTHENTICATION(
         "Key exchange failed",
         "The access point and the phone could not complete the encryption key exchange. With the right password that points to a security setting the phone and access point disagree on, or to frames being lost during the exchange.",
@@ -50,12 +52,27 @@ data class TestTarget(
     val bssid: String,
     val frequencyMhz: Int,
     val rssiDbm: Int,
+    /** What the radio says about itself in the scan; lets a failing radio be compared with a working one. */
+    val standard: WifiStandard = WifiStandard.UNKNOWN,
+    val channelWidthMhz: Int? = null,
+    /** True when the radio is one link of a Wi-Fi 7 multi-link access point. */
+    val multiLink: Boolean = false,
+    /** Android's raw description of the radio's security and features, e.g. "[RSN-PSK-CCMP][ESS]". */
+    val capabilities: String? = null,
 ) {
     val band: WifiBand get() = WifiChannels.bandOf(frequencyMhz)
     val channel: Int? get() = WifiChannels.channelOf(frequencyMhz)
 
     /** Short description such as "5 GHz ch 36". */
     val radioLabel: String get() = band.label + (channel?.let { " ch $it" } ?: "")
+
+    /** "Wi-Fi 6 · 80 MHz wide · multi-link", as far as the scan said; empty when it said nothing. */
+    val traits: String
+        get() = listOfNotNull(
+            standard.takeIf { it != WifiStandard.UNKNOWN }?.let { if (it.generation > 0) "Wi-Fi ${it.generation}" else it.label },
+            channelWidthMhz?.let { "$it MHz wide" },
+            "multi-link".takeIf { multiLink },
+        ).joinToString(" · ")
 }
 
 /** One request to connect to a target. Android may try several times behind one request. */
@@ -66,6 +83,11 @@ data class ConnectTrial(
     val failure: ConnectFailure? = null,
     /** From the request until Android reported the outcome. */
     val durationMs: Long,
+    /**
+     * How much of that passed before the phone made its first try: Android looking for the
+     * access point. Null when the phone's steps were not visible.
+     */
+    val waitMs: Long? = null,
     /**
      * Failed tries Android made silently before reporting the outcome, with the stage each
      * stopped at. Null when the phone does not reveal them.
@@ -79,7 +101,12 @@ data class TargetResult(val target: TestTarget, val trials: List<ConnectTrial>) 
 
     /** Silent retries across all trials, or null when the phone does not reveal them. */
     val hiddenFailureCount: Int? get() = if (trials.any { it.hiddenFailures == null }) null else trials.sumOf { it.hiddenFailures!!.size }
-    val medianConnectMs: Double? get() = Stats.median(trials.filter { it.success }.map { it.durationMs.toDouble() })
+    /** Typical time from the phone's first try until it was connected, leaving out the time Android spent looking for the radio. */
+    val medianConnectMs: Double?
+        get() = Stats.median(trials.filter { it.success }.map { (it.durationMs - (it.waitMs ?: 0)).coerceAtLeast(0).toDouble() })
+
+    /** Typical time Android spent looking for the radio before trying, when known. */
+    val medianWaitMs: Double? get() = Stats.median(trials.filter { it.success }.mapNotNull { it.waitMs?.toDouble() })
 
     /** Where the silent retries stopped, most frequent first. Empty when there were none or they are hidden. */
     val hiddenFailureStages: List<Pair<FailedStage, Int>>
@@ -175,6 +202,7 @@ object ConnectionTestAnalyzer {
                     "Restart the router. Its address service (DHCP) may have hung.",
                     "If the mesh is in bridge mode behind another router, check that router's DHCP address range is not used up.",
                 )
+                ConnectFailure.DROPPED -> "Every access point drops the phone right after letting it join" to DROPPED_FIXES
                 ConnectFailure.ASSOCIATION, ConnectFailure.NO_RESPONSE -> "No access point would take the phone" to listOf(
                     "Turn off client steering on the router for a test and try again; steering can work by refusing a device until it tries elsewhere.",
                     "Check the router is not blocking or pausing this phone, and that it has not reached its device limit.",
@@ -268,6 +296,19 @@ object ConnectionTestAnalyzer {
             )
         }
 
+        // ---- Let in, then cut off: a different thing from a failed key exchange ----
+        val droppedTries = hiddenStages.count { it == FailedStage.DROPPED } + reasons.count { it == ConnectFailure.DROPPED }
+        if (droppedTries > 0) {
+            val radios = tested.filter { r -> r.trials.any { it.failure == ConnectFailure.DROPPED || FailedStage.DROPPED in it.hiddenFailures.orEmpty() } }
+            findings += Finding(
+                "connect.dropped", Category.CONNECTING, Severity.WARNING,
+                "The phone is let in, then dropped at once",
+                "$droppedTries tr${if (droppedTries == 1) "y" else "ies"} at ${radios.joinToString(" and ") { describe(it) }} went the same way: " +
+                    FailedStage.DROPPED.explanation.replaceFirstChar { it.lowercase() },
+                DROPPED_FIXES,
+            )
+        }
+
         // ---- Silent retries, wherever they happened ----
         if (totalRetries > 0) {
             val byStage = hiddenStages.groupingBy { it }.eachCount().toList().sortedByDescending { it.second }
@@ -310,11 +351,18 @@ object ConnectionTestAnalyzer {
         val headline = when {
             findings.any { it.id == "connect.unit" } -> "The trouble follows one access point."
             findings.any { it.id == "connect.band" } -> findings.first { it.id == "connect.band" }.title + "."
-            findings.any { it.id == "connect.some_aps" } -> "The trouble is tied to specific access points."
+            findings.any { it.id == "connect.some_aps" } -> findings.first { it.id == "connect.some_aps" }.title + "."
             else -> "Connecting is unreliable everywhere."
         }
         return ConnectionTestReport(results, findings.sortedBy { it.severity.ordinal }, headline, stoppedBy)
     }
 
     private fun plural(count: Int) = if (count == 1) "" else "s"
+
+    private val DROPPED_FIXES = listOf(
+        "Turn off client steering (and band steering, if the router has it), then test only this radio again. Steering can work by pushing a device off a radio so that it picks another, which looks exactly like this.",
+        "Check the router's app for this phone being blocked, paused or in a restricted profile, and for a limit on the number of devices.",
+        "Run the same test on another phone from the same spot. If the other phone is let in, the cause is specific to this phone and this radio, and the router maker should be told: share these results.",
+        "To learn which side cuts the link, read the phone's own log over USB (adb logcat, lines with CTRL-EVENT-DISCONNECTED): it gives a reason code and says whether the phone or the access point ended it.",
+    )
 }

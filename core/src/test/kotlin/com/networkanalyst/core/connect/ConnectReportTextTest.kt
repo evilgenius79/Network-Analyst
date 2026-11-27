@@ -67,4 +67,15 @@ class ConnectReportTextTest {
         assertTrue(text.contains("- 2.4 GHz ch 6 (aa:bb:cc:00:00:01, -48 dBm): 1/1 connected"))
         assertTrue(text.contains("The test stopped early: Not accepted. Android turned the request down at once"))
     }
+
+    @Test
+    fun `each radio is described, and a long search before the first try is mentioned`() {
+        val radio = TestTarget("Home", "aa:bb:cc:00:00:02", 5180, -52, com.networkanalyst.core.model.WifiStandard.AX, 80, capabilities = "[RSN-PSK-CCMP][ESS]")
+        val results = listOf(
+            TargetResult(radio, listOf(ConnectTrial(radio.bssid, true, durationMs = 35_000, waitMs = 34_000, hiddenFailures = emptyList()))),
+        )
+        val text = ConnectReportText.build(ConnectionTestAnalyzer.analyze(results), emptyList())
+        assertTrue(text.contains("- 5 GHz ch 36 (aa:bb:cc:00:00:02, -52 dBm): 1/1 connected, typically 1.0 s, after Android spent 34 s looking for it, 0 silent retries"))
+        assertTrue(text.contains("    radio: Wi-Fi 6 · 80 MHz wide  [RSN-PSK-CCMP][ESS]"))
+    }
 }

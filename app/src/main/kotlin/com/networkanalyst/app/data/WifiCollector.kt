@@ -228,6 +228,9 @@ class WifiCollector(context: Context, private val connectivity: ConnectivityColl
             standard = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) mapStandard(result.wifiStandard) else WifiStandard.UNKNOWN,
             security = WifiSecurityParser.fromCapabilities(result.capabilities),
             isConnected = connectedBssid != null && bssid.equals(connectedBssid, ignoreCase = true),
+            capabilities = result.capabilities,
+            // A Wi-Fi 7 access point that links its radios together announces a shared address for them.
+            multiLink = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && result.apMldMacAddress != null,
         )
     }
 

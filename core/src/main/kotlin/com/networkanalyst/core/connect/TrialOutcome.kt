@@ -9,7 +9,26 @@ package com.networkanalyst.core.connect
  * events recorded during the request reveal them, on phones that broadcast connection steps.
  */
 object TrialOutcome {
-    data class Result(val failure: ConnectFailure?, val hiddenFailures: List<FailedStage>?)
+    data class Result(
+        val failure: ConnectFailure?,
+        val hiddenFailures: List<FailedStage>?,
+        /** Time from the start of the window until the phone's first try, when its steps were visible. */
+        val waitMs: Long? = null,
+    )
+
+    private val START_STATES = setOf("AUTHENTICATING", "ASSOCIATING")
+
+    /**
+     * How long after [requestedAtMs] the phone began its first try at the requested access
+     * point. Before that Android is looking for the access point, which is not the access
+     * point being slow to let the phone in.
+     */
+    fun waitBeforeFirstTry(windowEvents: List<WifiEvent>, requestedAtMs: Long, targetBssid: String? = null): Long? =
+        windowEvents.asSequence()
+            .filter { it.kind == WifiEventKind.SUPPLICANT && it.value.uppercase() in START_STATES }
+            .filter { targetBssid == null || it.bssid == null || it.bssid.equals(targetBssid, ignoreCase = true) }
+            .minOfOrNull { it.timeMs }
+            ?.let { (it - requestedAtMs).coerceAtLeast(0) }
 
     private val PROGRESS_STATES = setOf("ASSOCIATED", "FOUR_WAY_HANDSHAKE", "GROUP_HANDSHAKE", "COMPLETED")
 
@@ -73,6 +92,7 @@ object TrialOutcome {
             // then show where it keeps failing, which says more than "timed out".
             !observed.isNullOrEmpty() -> when (observed.last()) {
                 FailedStage.JOINING -> ConnectFailure.ASSOCIATION
+                FailedStage.DROPPED -> ConnectFailure.DROPPED
                 FailedStage.KEY_EXCHANGE -> ConnectFailure.AUTHENTICATION
                 FailedStage.IP_ADDRESS -> ConnectFailure.IP_ADDRESS
                 FailedStage.BEFORE_IP_ADDRESS -> if (timedOut) ConnectFailure.TIMED_OUT else ConnectFailure.UNKNOWN

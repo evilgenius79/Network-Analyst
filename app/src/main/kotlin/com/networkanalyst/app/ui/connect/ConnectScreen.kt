@@ -73,6 +73,7 @@ import com.networkanalyst.app.ui.components.Notice
 import com.networkanalyst.app.ui.components.SectionCard
 import com.networkanalyst.app.ui.components.StatTile
 import com.networkanalyst.app.ui.theme.LocalStatusColors
+import com.networkanalyst.core.connect.ConnectReportText
 import com.networkanalyst.core.connect.ConnectionTestReport
 import com.networkanalyst.core.connect.TargetPicker
 import com.networkanalyst.core.connect.TargetResult
@@ -340,7 +341,12 @@ private fun TargetRow(target: TestTarget, checked: Boolean, onToggle: () -> Unit
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(target.radioLabel, style = MaterialTheme.typography.bodyLarge)
-            Text(target.bssid, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // What the radio says about itself; two units of different make-up show here.
+            Text(
+                listOf(target.bssid, target.traits).filter { it.isNotEmpty() }.joinToString("  ·  "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         Text(
             "${target.rssiDbm} dBm" + if (weak) " · weak" else "",
@@ -427,7 +433,11 @@ private fun ResultRow(result: TargetResult) {
             if (details.isNotEmpty()) {
                 Text(details, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(result.target.bssid, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                listOf(result.target.bssid, result.target.traits).filter { it.isNotEmpty() }.joinToString("  ·  "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         Spacer(Modifier.width(8.dp))
         Text("${result.successes}/${result.trials.size}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = tint)
@@ -442,6 +452,8 @@ private fun StatusIcon(icon: ImageVector, tint: Color, description: String) {
 /** "typically 1.8 s to connect · 2 silent retries (2 refused when joining) · Refused when joining ×1" */
 internal fun resultDetails(result: TargetResult): String = listOfNotNull(
     result.medianConnectMs?.let { "typically ${String.format(Locale.US, "%.1f", it / 1000)} s to connect" },
+    // Time Android spent finding the radio first is not the radio being slow to let the phone in.
+    result.medianWaitMs?.takeIf { it >= ConnectReportText.LONG_WAIT_MS }?.let { "after ${String.format(Locale.US, "%.0f", it / 1000)} s looking for it" },
     result.hiddenFailureSummary,
     result.failureReasons.takeIf { it.isNotEmpty() }?.joinToString(", ") { "${it.first.label} ×${it.second}" },
 ).joinToString("  ·  ")
