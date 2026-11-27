@@ -7,18 +7,24 @@ internet line, DNS, speed and lag under load, then separates "the Wi-Fi is the w
 from "the internet line is the weak point" and lists concrete fixes with the measurement
 behind each one.
 
+It also answers a different question: why a phone sometimes **fails to join** the Wi-Fi at
+all. A connection test asks each access point of the network to take the phone, band by
+band, and a connection watch records every step the phone's own Wi-Fi takes.
+
 <p>
   <img src="docs/screenshots/scan-start.png" width="19%" alt="Start screen" />
   <img src="docs/screenshots/scan-report.png" width="19%" alt="Scan report" />
   <img src="docs/screenshots/scan-findings.png" width="19%" alt="Findings with fixes" />
   <img src="docs/screenshots/wifi.png" width="19%" alt="Wi-Fi analyser" />
-  <img src="docs/screenshots/devices.png" width="19%" alt="Devices" />
+  <img src="docs/screenshots/connect-result.png" width="19%" alt="Connection test result" />
 </p>
 
 > **Status:** everything here builds, passes its tests and has been checked against real
-> servers and real protocol implementations (see [docs/VERIFICATION.md](docs/VERIFICATION.md)),
-> but it has **not yet been run on a physical phone**. The screenshots are rendered from
-> sample data. Expect to find device-specific rough edges on first use.
+> servers, real protocol implementations and Android's own source code (see
+> [docs/VERIFICATION.md](docs/VERIFICATION.md)), but it has **not yet been run on a physical
+> phone**. The screenshots are rendered from sample data. Expect to find device-specific rough
+> edges on first use, above all in the connection test, which leans on how each phone maker's
+> Wi-Fi software behaves.
 
 ## What it checks
 
@@ -39,6 +45,61 @@ calls and gaming. It can be shared as plain text, for example with a provider's 
 
 Three more tabs give direct access to the Wi-Fi analyser (live signal, per-channel
 congestion chart, nearby networks), the speed test with history, and the device list.
+
+## When a phone will not connect
+
+The **Connect** tab is for the fault where a phone shows "Connection failed" some of the time
+while other devices are fine. It has two parts.
+
+<p>
+  <img src="docs/screenshots/connect-setup.png" width="19%" alt="Choosing access points to test" />
+  <img src="docs/screenshots/connect-running.png" width="19%" alt="Connection test running" />
+  <img src="docs/screenshots/connect-result.png" width="19%" alt="Connection test result" />
+  <img src="docs/screenshots/connect-watch.png" width="19%" alt="Connection watch" />
+</p>
+
+**Connection test.** Pick the network, type its password, and the app asks Android to join
+each access point radio in range separately, several times each. A mesh has one radio per
+band per unit, and the phone normally picks among them by itself, which is why such a fault
+comes and goes. The result shows, per radio:
+
+- how many requests connected, and how long connecting took;
+- for a failure, the step it stopped at: the access point refusing the phone, the encryption
+  key exchange, or getting an IP address;
+- how many times Android **retried silently** before reporting the outcome. Android retries a
+  requested connection up to three times before it admits failure, so a radio that "connected"
+  may have refused the phone twice first.
+
+From that it works out whether the trouble follows one band, one mesh unit, or everything,
+and says what to try. The result can be shared as text, for example with the router maker's
+support.
+
+**Connection watch.** While the app is open it logs every step the phone's own Wi-Fi takes:
+each attempt to join, where a failed one stopped, each drop and the signal strength just
+before it. Switch on *Keep watching in the background* and it goes on recording with the app
+closed (a notification shows while it does). After the next "Connection failed", the log says
+at which step it failed. If the watch has seen repeated failures in the last 24 hours, the
+full scan report mentions it too.
+
+Things to know about the test:
+
+- It needs Android 10 or newer; the failing step is named by Android itself from Android 14,
+  and worked out from the watch log on older versions.
+- Android shows its own dialog the first time, asking you to allow the connection. For a
+  password-protected network it asks once; for an open network it asks for each access point.
+- On most phones the normal Wi-Fi connection drops while the test runs, and comes back by
+  itself afterwards. The test connection carries no internet traffic.
+- Keep the app on screen until it finishes. Android only accepts these requests from the app
+  in front; if it is not, the test stops and says so.
+- The password is held in memory for the test only. It is never written to storage.
+- Networks that sign in with a user name (802.1X) or use WEP cannot be tested: Android does
+  not let apps request those.
+- Without background watching, Android holds Wi-Fi status updates back while the app is
+  closed and hands them over when it is reopened. The log marks both moments, because entries
+  recorded just after reopening may have happened earlier than their time says.
+- The silent-retry count and the detailed steps in the watch depend on a status broadcast
+  that Android's documentation calls deprecated, although current Android still sends it. On
+  a phone that does not, results are coarser and the app says so instead of showing zeros.
 
 ## Install
 
@@ -71,16 +132,20 @@ compile and target SDK 37 (Android 17), minimum SDK 26.
 | Location (precise) | Android only shows nearby Wi-Fi networks, and the name of the connected one, to apps holding it. Used for the channel analysis. Location itself is never read. |
 | Nearby devices / local network (Android 17+) | Android 17 blocks all traffic to the local network without it: pinging the router, querying it, finding devices. |
 | Wi-Fi state, change Wi-Fi state | Reading the link and asking for a fresh scan. |
+| Change network state | The connection test asks Android to connect to a chosen access point. |
+| Foreground service (connected device), notifications | Only for *Keep watching in the background*: Android holds back Wi-Fi status updates from apps that are not active, and a foreground service with its notification is the way to stay active. Not used unless switched on. |
 | Wake lock | Holding the low-latency Wi-Fi mode during latency tests, so the phone's own power saving is not mistaken for a slow network. |
 | Internet, network state | The tests themselves. |
 
-Every permission is optional. Without location the channel analysis is skipped; without
-local network access only the internet side is tested. The report says what was skipped.
+Every permission is optional. Without location the channel analysis and the connection test
+are skipped (they need the list of access points); without local network access only the
+internet side is tested. The report says what was skipped.
 
 ## Privacy
 
-There is no account, no analytics and no server of its own. Test history is stored on the
-phone and excluded from backups. The app talks to:
+There is no account, no analytics and no server of its own. Test history and the connection
+watch log are stored on the phone and excluded from backups. The Wi-Fi password typed into
+the connection test is passed to Android for that test and never stored. The app talks to:
 
 - **Cloudflare's speed test endpoints** (`speed.cloudflare.com`) for the speed test. Cloudflare
   sees your public IP address, as any speed test service does.
@@ -118,17 +183,19 @@ core/   Pure Kotlin, no Android. Measurement engines and analysis, tested on the
   wifi/        Channel maths, congestion scoring, security parsing
   discovery/   SSDP, UPnP gateway queries, mDNS, NetBIOS, LAN scanner, device classification
   analysis/    Rules that turn measurements into findings, score and verdicts
+  connect/     Connection attempts rebuilt from Wi-Fi events, test and watch analysis, event log
   history/     Stored results and the "usual speed" baseline
 app/    Android. Collectors, scan coordinator, Compose UI.
-  data/        Connectivity and Wi-Fi collectors, ICMP pinger with fallbacks, scan coordinator
-  ui/          Scan, Wi-Fi, Speed and Devices screens
+  data/        Connectivity and Wi-Fi collectors, ICMP pinger with fallbacks, scan coordinator,
+               connection tester, Wi-Fi event monitor, background watch service
+  ui/          Scan, Wi-Fi, Speed, Devices and Connect screens
 ```
 
 ## Tests
 
 ```sh
 ./gradlew :core:test                                   # engines and analysis
-./gradlew :app:testDebugUnitTest                       # app logic, launch smoke test
+./gradlew :app:testDebugUnitTest                       # app logic in a simulated Android, launch smoke test
 ./gradlew :app:recordRoborazziDebug                    # renders every screen to app/build/screenshots
 ./gradlew :core:test -PliveTests --tests '*LiveNetworkTest*'   # real speed test and DNS, uses the network
 ```

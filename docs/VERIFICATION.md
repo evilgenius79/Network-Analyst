@@ -6,9 +6,25 @@ as it could be without one. This page says what was checked, how, and what was n
 ## Not verified
 
 - **Nothing has run on a physical Android device.** The Android-specific code (Wi-Fi and
-  connectivity collectors, the ICMP pinger, permission flows, the scan coordinator) compiles
-  against the real Android 17 SDK and passes lint, and the app launches in Robolectric, but
-  its behaviour on real hardware is untested. This is the largest open risk.
+  connectivity collectors, the ICMP pinger, permission flows, the scan coordinator, the
+  connection tester, the event monitor and the background watch service) compiles against the
+  real Android 17 SDK and passes lint, and the app launches in Robolectric, but its behaviour
+  on real hardware is untested. This is the largest open risk.
+- **The connection test and connection watch on a real phone.** What Android does with a
+  requested connection was read from the source of Android's own Wi-Fi module (see the table
+  further down), and the app's side was exercised in a simulated Android in which the test
+  plays the part of the system. Phone makers ship their own Wi-Fi software, Samsung included,
+  and it may differ from that source. Not known until it runs on a phone:
+  - whether the phone sends the supplicant status broadcast that the detailed steps and the
+    silent-retry count rely on (Android's documentation marks it deprecated; the current
+    source still sends it, and only for the phone's main Wi-Fi interface);
+  - what the maker's approval dialog looks like and whether it behaves like the stock one;
+  - whether a foreground service really keeps Wi-Fi status updates arriving with the app
+    closed on that phone, given its battery management;
+  - how quickly Wi-Fi rejoins the saved network after a test.
+- **The 400 ms rule.** A request that ends in under 400 ms with no attempt seen is taken to
+  have been refused outright by Android (which it does when the app is not on screen). The
+  figure is a judgement: faster than a person can answer a dialog or a scan can complete.
 - **DNS timing against real resolvers.** The build sandbox intercepts DNS and answers every
   query itself, so the benchmark could only be tested against a local responder.
 - **Which `ping` program a given phone ships.** The parser handles both iputils and toybox
@@ -55,6 +71,31 @@ then run `./gradlew :core:test -PdaemonHost=<that interface's address> --tests '
 | UPnP message formats | Taken from miniupnpc, then confirmed against miniupnpd as above. |
 | Android APIs and permissions | The code compiles against the installed Android 17 SDK and passes lint's API-level check; the main Wi-Fi, connectivity and socket APIs were also looked up in the SDK's `api-versions.xml`. Permission behaviour (Wi-Fi scanning, Android 17 local network permission, low-latency Wi-Fi lock) was read from the Android developer documentation. |
 
+### How Android handles a requested Wi-Fi connection
+
+The connection test is built on `WifiNetworkSpecifier`. Its documented behaviour was read
+from the Android developer reference; the details below are not in the documentation and
+were read from the Wi-Fi module's source (`WifiNetworkFactory.java`, `WifiConfiguration.java`,
+`WifiNetworkSpecifier.java`, `WifiManager.java`) in LineageOS's copy of AOSP
+`packages/modules/Wifi`, branch `lineage-23.0`, because the AOSP host was not reachable.
+
+| Behaviour the app relies on | Where it was read |
+| --- | --- |
+| A request is only accepted from an app or service in the foreground, and is rejected at once when Wi-Fi is off. A rejected request is released as unfulfillable, which the app receives as `onUnavailable`. | `acceptRequest`, `needNetworkFor`, `cleanupActiveRequest` |
+| A failed connection is retried up to three more times before failure is reported, except for a wrong password, which is not retried. | `USER_SELECTED_NETWORK_CONNECT_RETRY_MAX`, `handleNetworkConnectionFailure` |
+| The user's approval is remembered per app. For password-protected networks a later request for any access point with the same name and security type skips the dialog; for open networks only the exact access point approved before does. | `isAccessPointApprovedInInternalApprovalList` |
+| The connection is made through a temporary network entry of the app's own, pinned to the requested access point and separate from the phone's saved network of the same name, so the test uses the password typed in and leaves the saved network alone. The entry is removed when the request is released. | `handleConnectToNetworkUserSelectionInternal` (`ephemeral`, `shared = false`, `fromWifiNetworkSpecifier`, `BSSID`), `WifiConfiguration.getProfileKey`, `disconnectAndRemoveNetworkFromWifiConfigManager` |
+| Requesting one band is not implemented, so radios are targeted by address instead. | `TODO(b/188021807)` in `handleConnectToNetworkUserSelectionInternal` |
+| While it waits for approval or looks for the access point, scanning pauses when the screen turns off, so the app keeps the screen on during the test. | `handleScreenStateChanged` |
+| Normal automatic joining is switched back on when the request ends. | `removeClientModeManagerIfNecessary` |
+| Passwords must be ASCII or the builder throws; the app checks this before starting. | `WifiNetworkSpecifier.Builder.setWpa2Passphrase`, `setWpa3Passphrase` |
+| Failure reasons reported to the app from Android 14: unknown, association, authentication, IP provisioning, not found, no response, and (Android 16) user reject. | `internalConnectionEventToLocalOnlyFailureCode`, `WifiManager.STATUS_LOCAL_ONLY_CONNECTION_FAILURE_*`; the app's mapping is asserted against the SDK constants in `ConnectionTesterTest` |
+| Name and extras of the supplicant status broadcast, and the authentication error codes. | `WifiManager`; asserted against the SDK constants in `WifiEventMonitorTest` |
+
+Foreground service rules (the `connectedDevice` type and the permissions it needs, and that
+status broadcasts are held back from apps that are not active) were read from the Android
+developer documentation.
+
 ## Verified by simulation
 
 - **Speed measurement accuracy.** A local server that behaves like a line of fixed capacity
@@ -67,6 +108,26 @@ then run `./gradlew :core:test -PdaemonHost=<that interface's address> --tests '
 - **Analysis rules.** Scenario tests cover a healthy network, weak Wi-Fi, a bad line,
   crowded channels, bufferbloat, slow and dead DNS, double NAT, a 100 Mbps WAN port,
   background traffic, mobile data, VPN and partial scans.
+- **Connection attempts from Wi-Fi events.** Scenario tests rebuild attempts from event
+  sequences: clean connections, failures at each step, silent retries, moves between access
+  points, events arriving out of order between the two status channels, phones that report
+  only coarse states, and the tail of an unrelated attempt at the start of a test window.
+- **Connection test conclusions.** Scenario tests cover everything working, nothing working
+  (by reason), one band failing, some access points failing, flaky everywhere, success only
+  after retries, and tests that were declined or cut short.
+- **The connection tester inside a simulated Android** (Robolectric). The test plays the
+  system: it answers each connection request and sends the Wi-Fi steps a phone would. This
+  covers a run across two access points with a clean success and a failure after silent
+  retries, a request declined in the dialog, a request refused outright, stopping midway, and
+  every reason for refusing to start. It checks the tester's logic, not a real phone's replies.
+- **The event recorder inside a simulated Android.** Broadcasts built by hand, and one sent
+  through the simulated system, are recorded correctly; the log survives a restart.
+- **The Connect tab's logic.** A simulated Wi-Fi scan goes in; the networks offered, the
+  access points ticked by default, and the conditions for starting are checked, along with
+  refusing to start and stopping.
+- **The background watch service inside a simulated Android.** It enters the foreground with
+  its notification and Stop button, and clears its state when stopped. Leaving and reopening
+  the app is noted in the log; a rotation is not.
 - **Screens.** Every screen is rendered on the JVM from sample data
   (`./gradlew :app:recordRoborazziDebug`) and was looked at. A smoke test launches the real
   activity and opens every tab.
