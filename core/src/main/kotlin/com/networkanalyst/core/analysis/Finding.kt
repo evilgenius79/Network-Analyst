@@ -26,6 +26,7 @@ enum class Category(val label: String) {
     ROUTER("Router"),
     DEVICES("Devices"),
     SECURITY("Security"),
+    CONNECTING("Connecting"),
 }
 
 /** One conclusion from the analysis, written for a person rather than an engineer. */
