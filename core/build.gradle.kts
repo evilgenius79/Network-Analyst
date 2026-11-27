@@ -30,8 +30,9 @@ tasks.test {
     // Live tests talk to real servers; they only run when explicitly requested.
     val live = providers.gradleProperty("liveTests").isPresent
     systemProperty("liveTests", live.toString())
+    providers.gradleProperty("daemonHost").orNull?.let { systemProperty("daemonHost", it) }
     testLogging {
         events("failed", "skipped")
-        showStandardStreams = live
+        showStandardStreams = live || providers.gradleProperty("daemonHost").isPresent
     }
 }

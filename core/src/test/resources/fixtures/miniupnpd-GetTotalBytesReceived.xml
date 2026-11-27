@@ -1,0 +1,3 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:GetTotalBytesReceivedResponse xmlns:u="urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1"><NewTotalBytesReceived>4367458077</NewTotalBytesReceived></u:GetTotalBytesReceivedResponse></s:Body></s:Envelope>
+
