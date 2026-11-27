@@ -94,8 +94,6 @@ data class DnsServerResult(
 @Serializable
 data class DnsBenchmarkResult(
     val servers: List<DnsServerResult> = emptyList(),
-    /** Time for lookups through Android's own resolver path, which includes Private DNS. */
-    val systemResolverMs: List<Double> = emptyList(),
 ) {
     val systemServers: List<DnsServerResult> get() = servers.filter { it.isSystem }
     val publicServers: List<DnsServerResult> get() = servers.filter { !it.isSystem }

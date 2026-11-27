@@ -158,6 +158,19 @@ class LanScanner(
         LanScanResult(devices, gatewayDescription, subnet.toString(), hosts.size, truncated)
     }
 
+    /**
+     * Looks for the internet gateway only, without sweeping the subnet. Used when the full
+     * device scan is switched off but the router's own report is still wanted.
+     */
+    suspend fun findGateway(listenMs: Long = 2_500): UpnpDescription? {
+        val responses = Ssdp.search(
+            transport::datagramSocket,
+            searchTargets = listOf(Ssdp.TARGET_GATEWAY, Ssdp.TARGET_ROOT_DEVICE),
+            listenMs = listenMs,
+        )
+        return fetchDescriptions(responses).values.firstOrNull { it.isInternetGateway }
+    }
+
     /** Queries the router for WAN details using a description found by [scan]. */
     suspend fun queryGateway(description: UpnpDescription, trafficSampleMs: Long = 3_000): GatewayInfo =
         UpnpClient(transport.httpClient).queryGateway(description, trafficSampleMs)
