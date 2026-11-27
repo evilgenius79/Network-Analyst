@@ -137,10 +137,14 @@ class ConnectivityCollector(context: Context) {
 
     /** Builds a fresh description of the connection from the latest known state. */
     fun snapshot(): ConnectionInfo {
-        val default = defaultNetwork ?: connectivity.activeNetwork?.let { network ->
-            Tracked(network, connectivity.getNetworkCapabilities(network), connectivity.getLinkProperties(network))
-        }
-        val defaultCaps = default?.capabilities ?: return ConnectionInfo(batterySaverOn = power?.isPowerSaveMode == true)
+        val disconnected = ConnectionInfo(batterySaverOn = power?.isPowerSaveMode == true)
+        val default = defaultNetwork
+            ?: connectivity.activeNetwork?.let { network ->
+                Tracked(network, connectivity.getNetworkCapabilities(network), connectivity.getLinkProperties(network))
+            }
+            ?: return disconnected
+        // Link properties can arrive before capabilities; ask directly rather than report "no connection".
+        val defaultCaps = default.capabilities ?: connectivity.getNetworkCapabilities(default.network) ?: return disconnected
 
         val isVpn = defaultCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
         val wifiNetwork = wifi ?: wifiNetwork()?.let { network ->
