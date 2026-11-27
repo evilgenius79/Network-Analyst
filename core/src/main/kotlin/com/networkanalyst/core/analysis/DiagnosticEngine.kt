@@ -32,6 +32,10 @@ object DiagnosticEngine {
     private const val RSSI_GOOD = -67
     private const val RSSI_WEAK = -75
 
+    // Packet loss, percent, after discounting a single lost probe (see PingResult).
+    private const val LOSS_NOTABLE = 2.5
+    private const val LOSS_SEVERE = 10.0
+
     fun diagnose(snapshot: NetworkSnapshot, baseline: SpeedBaseline? = null): Diagnosis {
         val findings = ArrayList<Finding>()
         val context = Context(snapshot, baseline, findings)
@@ -70,18 +74,23 @@ object DiagnosticEngine {
         )
     }
 
+    /**
+     * Each finding takes a share of what is left rather than a fixed number of points, so one
+     * serious problem costs a lot while a long list of findings still leaves a meaningful
+     * score instead of bottoming out.
+     */
     private fun healthScore(findings: List<Finding>, snapshot: NetworkSnapshot): Int {
         if (snapshot.connection.transport == Transport.NONE) return 0
-        var score = 100
+        var remaining = 1.0
         for (finding in findings) {
-            score -= when (finding.severity) {
-                Severity.CRITICAL -> 25
-                Severity.WARNING -> 10
-                Severity.INFO -> 1
-                Severity.GOOD -> 0
+            remaining *= when (finding.severity) {
+                Severity.CRITICAL -> 0.70
+                Severity.WARNING -> 0.88
+                Severity.INFO -> 0.99
+                Severity.GOOD -> 1.0
             }
         }
-        return score.coerceIn(5, 100)
+        return Math.round(remaining * 100).toInt().coerceIn(1, 100)
     }
 
     private fun Double.fmt(decimals: Int = 0): String = String.format(Locale.US, "%.${decimals}f", this)
@@ -259,11 +268,11 @@ object DiagnosticEngine {
         fun wifiBand() {
             if (!onWifi || link == null || band != WifiBand.GHZ_2_4) return
             val ssid = link.ssid?.takeIf { it.isNotBlank() }
-            val fasterSibling = accessPoints
+            val siblings = accessPoints
                 .filter { ssid != null && it.ssid == ssid }
                 .filter { WifiChannels.bandOf(it.frequencyMhz).let { b -> b == WifiBand.GHZ_5 || b == WifiBand.GHZ_6 } }
-                .filter { it.rssiDbm >= -72 }
-                .maxByOrNull { it.rssiDbm }
+            val fasterSibling = siblings.filter { it.rssiDbm >= -72 }.maxByOrNull { it.rssiDbm }
+            val weakSibling = siblings.maxByOrNull { it.rssiDbm }
             when {
                 fasterSibling != null -> add(
                     "wifi.band.slow", Category.WIFI_SETUP, Severity.WARNING, "On the slow 2.4 GHz band while a faster one is in range",
@@ -272,6 +281,11 @@ object DiagnosticEngine {
                         "Turn Wi-Fi off and on, or forget the network and rejoin it, so the phone chooses again.",
                         "In the router settings, turn on band steering (often called Smart Connect), or give the 5 GHz band its own network name and connect to that.",
                     ),
+                )
+                weakSibling != null -> add(
+                    "wifi.band.5weak", Category.WIFI_SETUP, Severity.INFO, "On 2.4 GHz because 5 GHz is too weak here",
+                    "$ssidLabel also broadcasts on ${WifiChannels.bandOf(weakSibling.frequencyMhz).label}, but only at ${weakSibling.rssiDbm} dBm at this spot, so the phone is right to stay on 2.4 GHz. Closer to the router the faster band becomes usable.",
+                    listOf("To get the faster band here, improve coverage: move the router, or add a mesh node or wired access point nearby."),
                 )
                 snapshot.wifiCapabilities?.supports5Ghz == false -> add(
                     "wifi.band.phone24only", Category.WIFI_SETUP, Severity.INFO, "This phone only supports 2.4 GHz Wi-Fi",
@@ -465,7 +479,8 @@ object DiagnosticEngine {
                 return
             }
             val median = ping.medianMs!!
-            val loss = ping.lossPercent
+            val loss = ping.significantLossPercent
+            val lostText = "${ping.lost} of ${ping.sent} test packets (${loss.fmt(0)}%)"
             val jitter = ping.jitterMs ?: 0.0
             val wifiFixes = listOf(
                 "Work through the Wi-Fi signal and channel findings in this report; this hop is the Wi-Fi link itself.",
@@ -473,14 +488,14 @@ object DiagnosticEngine {
                 "If many devices are active, connect the stationary ones by cable.",
             )
             when {
-                loss >= 5.0 -> add(
+                loss >= LOSS_SEVERE -> add(
                     "local.loss.high", Category.LOCAL_NETWORK, Severity.CRITICAL, "Packets are being lost between phone and router",
-                    "${loss.fmt(0)}% of test packets to the router (${ping.target}) never came back. Lost packets have to be sent again, which shows up as stalls, buffering and broken calls. This is inside your home, before the internet line.",
+                    "$lostText to the router (${ping.target}) never came back. Lost packets have to be sent again, which shows up as stalls, buffering and broken calls. This is inside your home, before the internet line.",
                     wifiFixes,
                 )
-                loss >= 1.0 -> add(
+                loss >= LOSS_NOTABLE -> add(
                     "local.loss", Category.LOCAL_NETWORK, Severity.WARNING, "Some packet loss between phone and router",
-                    "${loss.fmt(0)}% of test packets to the router (${ping.target}) were lost. A healthy Wi-Fi link loses almost none.",
+                    "$lostText to the router (${ping.target}) were lost. A healthy Wi-Fi link loses almost none.",
                     wifiFixes,
                 )
             }
@@ -495,12 +510,12 @@ object DiagnosticEngine {
                     "The router takes ${ms(median)} to answer from here; a healthy Wi-Fi link manages well under 10 ms.",
                     wifiFixes,
                 )
-                jitter >= 15 && loss < 1.0 -> add(
+                jitter >= 15 && loss < LOSS_NOTABLE -> add(
                     "local.jitter", Category.LOCAL_NETWORK, Severity.WARNING, "Uneven response from the router",
                     "Replies from the router vary by ${ms(jitter)} from one packet to the next (median ${ms(median)}). That unevenness is typical of a busy or interfered-with Wi-Fi channel and is what makes calls and games stutter.",
                     wifiFixes,
                 )
-                loss < 1.0 -> add(
+                loss < LOSS_NOTABLE -> add(
                     "local.good", Category.LOCAL_NETWORK, Severity.GOOD, "Link to the router is healthy",
                     "The router answers in ${ms(median)} with no meaningful loss.",
                 )
@@ -524,8 +539,9 @@ object DiagnosticEngine {
             }
             val median = best.medianMs!!
             // Loss counts against the line only for the part not already explained by the Wi-Fi hop.
-            val localLoss = gatewayPing?.takeIf { it.reachable }?.lossPercent ?: 0.0
-            val lineLoss = (snapshot.internetPings.filter { it.reachable }.minOf { it.lossPercent } - localLoss).coerceAtLeast(0.0)
+            // Taking the least lossy target means every target must show loss before the line is blamed.
+            val localLoss = gatewayPing?.takeIf { it.reachable }?.significantLossPercent ?: 0.0
+            val lineLoss = (snapshot.internetPings.filter { it.reachable }.minOf { it.significantLossPercent } - localLoss).coerceAtLeast(0.0)
             val localMedian = gatewayPing?.medianMs ?: 0.0
             val beyondRouter = (median - localMedian).coerceAtLeast(0.0)
             val lineFixes = listOf(
@@ -535,12 +551,12 @@ object DiagnosticEngine {
                 "Give these numbers to your provider; loss or high latency past your router is theirs to fix.",
             )
             when {
-                lineLoss >= 3.0 -> add(
+                lineLoss >= LOSS_SEVERE -> add(
                     "internet.loss.high", Category.INTERNET, Severity.CRITICAL, "Packet loss on the internet line",
                     "${lineLoss.fmt(0)}% of test packets to the internet were lost beyond what the Wi-Fi link loses. The fault is past your router: modem, line or provider.",
                     lineFixes,
                 )
-                lineLoss >= 1.0 -> add(
+                lineLoss >= LOSS_NOTABLE -> add(
                     "internet.loss", Category.INTERNET, Severity.WARNING, "Some packet loss on the internet line",
                     "${lineLoss.fmt(0)}% of test packets to the internet were lost beyond what the Wi-Fi link loses.",
                     lineFixes,
@@ -559,12 +575,12 @@ object DiagnosticEngine {
                     "Reaching ${best.label} takes ${ms(median)}" + routerShare(localMedian, beyondRouter) + ". Browsing is fine but calls and games will feel delayed.",
                     if (mobile) emptyList() else lineFixes,
                 )
-                jitter >= 30 && lineLoss < 1.0 -> add(
+                jitter >= 30 && lineLoss < LOSS_NOTABLE -> add(
                     "internet.jitter", Category.INTERNET, Severity.WARNING, "Unsteady internet latency",
                     "Latency to ${best.label} varies by ${ms(jitter)} between packets (median ${ms(median)}). Uneven delay makes voice and video calls choppy.",
                     if (mobile) emptyList() else lineFixes,
                 )
-                lineLoss < 1.0 -> add(
+                lineLoss < LOSS_NOTABLE -> add(
                     "internet.good", Category.INTERNET, Severity.GOOD, "Internet latency is good",
                     "Reaching ${best.label} takes ${ms(median)} with no meaningful loss.",
                 )
@@ -799,7 +815,7 @@ object DiagnosticEngine {
             if (!onWifi) return false
             val signalOk = (rssi ?: -100) >= RSSI_GOOD
             val ping = gatewayPing?.takeIf { it.reachable }
-            val hopOk = ping == null || ((ping.medianMs ?: 0.0) < 30 && ping.lossPercent < 1.0)
+            val hopOk = ping == null || ((ping.medianMs ?: 0.0) < 30 && ping.significantLossPercent < LOSS_NOTABLE)
             return signalOk && hopOk && !has("wifi.linkrate") && !has("wifi.standard.legacy") && !has("wifi.security.legacy")
         }
 
@@ -901,9 +917,9 @@ object DiagnosticEngine {
                     (if (onWifi) "Your Wi-Fi link looks fine. " else "") +
                     "The biggest problem is past the router, on the line or at the provider: ${top?.title?.replaceFirstChar { it.lowercase() }}.$more"
                 Bottleneck.BUFFERBLOAT -> "The connection lags when it is busy" to
-                    "Speed is fine, but latency shoots up whenever the line is in heavy use. A router setting fixes this.$more"
+                    "Latency shoots up whenever the line is in heavy use, so calls, games and page loads lag while anyone is downloading or uploading. A router setting fixes this.$more"
                 Bottleneck.DNS -> "Slow name lookups are holding things back" to
-                    "The line itself is fine, but the DNS server is slow or unreliable, which delays the start of every page load.$more"
+                    "The DNS server this network uses is slow or unreliable, which delays the start of every page load.$more"
                 Bottleneck.VPN -> "The VPN is the weak point" to "Pause the VPN and scan again."
                 Bottleneck.NONE -> if (connection.isVpn) {
                     "No problems found (through the VPN)" to "Nothing is wrong on the path through your VPN. Pause it and scan again to check the line on its own."
@@ -921,7 +937,7 @@ object DiagnosticEngine {
             val up = result?.uploadMbps
             val latency = internetPing?.medianMs ?: result?.idleLatencyMs
             val jitter = internetPing?.jitterMs ?: result?.idleJitterMs
-            val loss = internetPing?.lossPercent
+            val loss = internetPing?.significantLossPercent
             val added = result?.bufferbloatMs
             if (down == null && up == null && latency == null) return emptyList()
             val verdicts = ArrayList<UseCaseVerdict>()
@@ -947,9 +963,9 @@ object DiagnosticEngine {
             // Zoom lists about 3.8 Mbps up and 3.0 Mbps down for 1080p group calls.
             verdicts += when {
                 down == null || up == null -> UseCaseVerdict("Video calls", Rating.UNKNOWN, "Needs a speed test.")
-                up < 1 || down < 1.5 || (loss ?: 0.0) >= 5 || (latency ?: 0.0) >= 300 ->
+                up < 1 || down < 1.5 || (loss ?: 0.0) >= LOSS_SEVERE || (latency ?: 0.0) >= 300 ->
                     UseCaseVerdict("Video calls", Rating.POOR, "Calls will freeze or drop.")
-                up >= 3.8 && down >= 3 && (latency ?: 0.0) < 150 && (jitter ?: 0.0) < 30 && (loss ?: 0.0) < 2 && (added ?: 0.0) < 200 ->
+                up >= 3.8 && down >= 3 && (latency ?: 0.0) < 150 && (jitter ?: 0.0) < 30 && (loss ?: 0.0) < LOSS_NOTABLE && (added ?: 0.0) < 200 ->
                     UseCaseVerdict("Video calls", Rating.GREAT, "HD group calls should run smoothly.")
                 else -> UseCaseVerdict(
                     "Video calls", Rating.OK,
@@ -963,9 +979,9 @@ object DiagnosticEngine {
 
             verdicts += when {
                 latency == null -> UseCaseVerdict("Online gaming", Rating.UNKNOWN, "Needs a latency test.")
-                latency < 50 && (jitter ?: 0.0) < 15 && (loss ?: 0.0) < 1 && (added ?: 0.0) < 60 ->
+                latency < 50 && (jitter ?: 0.0) < 15 && (loss ?: 0.0) < LOSS_NOTABLE && (added ?: 0.0) < 60 ->
                     UseCaseVerdict("Online gaming", Rating.GREAT, "Low, steady latency.")
-                latency < 100 && (loss ?: 0.0) < 2.5 -> UseCaseVerdict(
+                latency < 100 && (loss ?: 0.0) < LOSS_SEVERE -> UseCaseVerdict(
                     "Online gaming", Rating.OK,
                     if ((added ?: 0.0) >= 60) "Playable, but lags when others use the line." else "Playable; fast-paced games will feel slightly delayed.",
                 )

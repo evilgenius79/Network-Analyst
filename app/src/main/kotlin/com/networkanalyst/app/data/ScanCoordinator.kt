@@ -150,8 +150,12 @@ class ScanCoordinator(
         var internetPings: List<PingResult> = emptyList()
         withLowLatencyWifi {
             val gateway = connection.gatewayV4?.takeIf { onWifi && localAllowed }
-            val gatewayJob = gateway?.let { async { localPinger.ping(it, "Router", tcpPorts = listOf(53, 80, 443)) } }
-            val internetJobs = INTERNET_TARGETS.map { (address, label) -> async { internetPinger.ping(address, label) } }
+            val gatewayJob = gateway?.let {
+                async { localPinger.ping(it, "Router", PING_COUNT, PING_INTERVAL_MS, tcpPorts = listOf(53, 80, 443)) }
+            }
+            val internetJobs = INTERNET_TARGETS.map { (address, label) ->
+                async { internetPinger.ping(address, label, PING_COUNT, PING_INTERVAL_MS) }
+            }
             gatewayPing = gatewayJob?.await()
             internetPings = internetJobs.awaitAll()
         }
@@ -302,6 +306,10 @@ class ScanCoordinator(
     companion object {
         const val API_LOCAL_NETWORK_PERMISSION = 37
         private const val SERIES_POINTS = 60
+
+        /** Forty probes over four seconds: enough that two lost packets (5%) stand out. */
+        private const val PING_COUNT = 40
+        private const val PING_INTERVAL_MS = 100L
 
         /** Well-connected public anycast addresses used as "the internet". */
         val INTERNET_TARGETS = listOf("1.1.1.1" to "Cloudflare (1.1.1.1)", "8.8.8.8" to "Google (8.8.8.8)")

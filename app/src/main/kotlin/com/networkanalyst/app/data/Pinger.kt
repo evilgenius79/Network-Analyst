@@ -72,11 +72,14 @@ class Pinger(private val network: Network?) {
 
     /** Runs the system ping binary. Returns null if it is missing or printed nothing usable. */
     private suspend fun shellPing(target: String, label: String, count: Int, intervalMs: Long): PingResult? {
+        // The ping program refuses intervals under 0.2 s to ordinary users, so send fewer
+        // probes rather than take twice as long.
         val interval = String.format(java.util.Locale.US, "%.1f", (intervalMs / 1000.0).coerceAtLeast(0.2))
-        val output = runPing(listOf("-c", count.toString(), "-i", interval, "-W", "1", target), timeoutMs = count * 1_300L + 3_000) ?: return null
+        val probes = count.coerceAtMost(20)
+        val output = runPing(listOf("-c", probes.toString(), "-i", interval, "-W", "1", target), timeoutMs = probes * 1_300L + 3_000) ?: return null
         val parsed = PingOutputParser.parse(output)
         if (parsed.transmitted == null && parsed.replies.isEmpty()) return null
-        return PingResult(target, label, PingMethod.SYSTEM_PING, parsed.transmitted ?: count, parsed.replies.sortedBy { it.sequence }.map { it.timeMs })
+        return PingResult(target, label, PingMethod.SYSTEM_PING, parsed.transmitted ?: probes, parsed.replies.sortedBy { it.sequence }.map { it.timeMs })
     }
 
     private suspend fun runPing(arguments: List<String>, timeoutMs: Long): String? = withContext(Dispatchers.IO) {

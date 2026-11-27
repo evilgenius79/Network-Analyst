@@ -65,7 +65,15 @@ data class PingResult(
     val error: String? = null,
 ) {
     val received: Int get() = rttsMs.size
-    val lossPercent: Double get() = if (sent == 0) 0.0 else (sent - received) * 100.0 / sent
+    val lost: Int get() = (sent - received).coerceAtLeast(0)
+    val lossPercent: Double get() = if (sent == 0) 0.0 else lost * 100.0 / sent
+
+    /**
+     * Loss in percent for judging the link, treating a single missing reply as none: one
+     * dropped probe in a short burst happens on perfectly healthy Wi-Fi, so it takes at
+     * least two before loss says anything.
+     */
+    val significantLossPercent: Double get() = if (lost <= 1) 0.0 else lossPercent
     val minMs: Double? get() = rttsMs.minOrNull()
     val maxMs: Double? get() = rttsMs.maxOrNull()
     val avgMs: Double? get() = Stats.mean(rttsMs)

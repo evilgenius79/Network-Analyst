@@ -216,6 +216,68 @@ class DiagnosticEngineTest {
     }
 
     @Test
+    fun `a single lost probe is not treated as packet loss`() {
+        val oneLost = healthy().copy(
+            gatewayPing = steadyPing("192.168.1.1", "Router", 2.5, sent = 40, lost = 1),
+            internetPings = listOf(steadyPing("1.1.1.1", "Cloudflare", 13.0, sent = 40, lost = 1), steadyPing("8.8.8.8", "Google", 16.0, sent = 40, lost = 1)),
+        )
+        val diagnosis = DiagnosticEngine.diagnose(oneLost)
+        assertEquals(emptyList<String>(), diagnosis.problemIds())
+        assertEquals(Severity.GOOD, diagnosis.find("local.good")!!.severity)
+        assertTrue(diagnosis.useCases.all { it.rating == Rating.GREAT })
+
+        // Two lost of forty (5%) is worth a warning; four (10%) is serious.
+        val twoLost = healthy().copy(gatewayPing = steadyPing("192.168.1.1", "Router", 2.5, sent = 40, lost = 2))
+        val warning = DiagnosticEngine.diagnose(twoLost).find("local.loss")!!
+        assertEquals(Severity.WARNING, warning.severity)
+        assertTrue(warning.detail, warning.detail.startsWith("2 of 40 test packets (5%)"))
+        val fourLost = healthy().copy(gatewayPing = steadyPing("192.168.1.1", "Router", 2.5, sent = 40, lost = 4))
+        assertEquals(Severity.CRITICAL, DiagnosticEngine.diagnose(fourLost).find("local.loss.high")!!.severity)
+    }
+
+    @Test
+    fun `loss on only one internet target does not blame the line`() {
+        val snapshot = healthy().copy(
+            internetPings = listOf(steadyPing("1.1.1.1", "Cloudflare", 13.0, sent = 40, lost = 6), steadyPing("8.8.8.8", "Google", 16.0, sent = 40)),
+        )
+        val diagnosis = DiagnosticEngine.diagnose(snapshot)
+        assertNull(diagnosis.find("internet.loss"))
+        assertNull(diagnosis.find("internet.loss.high"))
+    }
+
+    @Test
+    fun `health score shrinks by a share per finding instead of bottoming out`() {
+        // One warning.
+        assertEquals(88, DiagnosticEngine.diagnose(healthy().copy(dns = dns(systemMs = 180.0))).healthScore)
+        // One critical.
+        assertEquals(70, DiagnosticEngine.diagnose(healthy().copy(speed = speed(idle = 14.0, ulLoaded = 500.0))).healthScore)
+        // Even a long list of problems leaves a score above the floor.
+        val ap = myAp(freq = 2437, rssi = -79, width = 20)
+        val bad = healthy().copy(
+            wifiLink = link(ap, tx = 26, rx = 39),
+            wifiScan = WifiScan(listOf(ap, neighbour(1, 2437, -58), neighbour(2, 2437, -61), neighbour(3, 2437, -66)), fresh = true),
+            gatewayPing = steadyPing("192.168.1.1", "Router", 45.0, sent = 40, lost = 6),
+            dns = dns(systemMs = 180.0),
+            speed = speed(down = 3.0, up = 0.5, idle = 30.0, ulLoaded = 500.0),
+        )
+        val score = DiagnosticEngine.diagnose(bad).healthScore
+        assertTrue("score $score", score in 2..25)
+    }
+
+    @Test
+    fun `5 GHz in sight but too weak is explained, not called missing`() {
+        val ap = myAp(freq = 2437, rssi = -68, width = 20)
+        val weak5 = AccessPoint("Home", "a4:11:22:33:44:54", -78, 5180, 80)
+        val snapshot = healthy().copy(wifiLink = link(ap, tx = 144, rx = 144), wifiScan = WifiScan(listOf(ap, weak5), fresh = true), speed = speed(down = 45.0))
+        val diagnosis = DiagnosticEngine.diagnose(snapshot)
+        val finding = diagnosis.find("wifi.band.5weak")!!
+        assertEquals(Severity.INFO, finding.severity)
+        assertTrue(finding.detail.contains("only at -78 dBm"))
+        assertNull(diagnosis.find("wifi.band.24only"))
+        assertNull(diagnosis.find("wifi.band.slow"))
+    }
+
+    @Test
     fun `fluctuating signal is reported`() {
         val ap = myAp(rssi = -60)
         val snapshot = healthy().copy(wifiLink = link(ap, samples = listOf(-52, -66, -55, -70, -51, -68)))
@@ -431,8 +493,8 @@ class DiagnosticEngineTest {
         val severities = diagnosis.findings.map { it.severity.ordinal }
         assertEquals(severities.sorted(), severities)
         assertEquals(Severity.CRITICAL, diagnosis.findings.first().severity)
-        // Two criticals (speed, bufferbloat) and one warning (dns): 100 - 25 - 25 - 10.
-        assertEquals(40, diagnosis.healthScore)
+        // Two criticals (speed, bufferbloat) and one warning (dns): 100 x 0.70 x 0.70 x 0.88.
+        assertEquals(43, diagnosis.healthScore)
         assertEquals(3, diagnosis.problems.size)
     }
 

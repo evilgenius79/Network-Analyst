@@ -22,10 +22,20 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // Code shrinking is left off on purpose: the release build then contains exactly
+            // the code the tests exercise. Turn it on (with the rules file below) only after
+            // checking the shrunk app on a real device.
+            isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Signed with the local debug key so the APK can be sideloaded as built. Use a
+            // private keystore before distributing the app to anyone else.
+            signingConfig = signingConfigs.getByName("debug")
         }
+    }
+
+    lint {
+        abortOnError = true
+        warningsAsErrors = false
     }
 
     compileOptions {
