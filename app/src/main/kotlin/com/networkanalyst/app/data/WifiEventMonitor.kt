@@ -150,15 +150,16 @@ class WifiEventMonitor(
                 if (intent.getIntExtra(EXTRA_SUPPLICANT_ERROR, 0) == ERROR_AUTHENTICATING) {
                     record(WifiEvent(now(), WifiEventKind.AUTH_ERROR, authReason(intent.getIntExtra(EXTRA_SUPPLICANT_ERROR_REASON, 0))))
                 }
-                val settled = state == SupplicantState.COMPLETED
-                val link = if (settled) runCatching { wifi.currentLink() }.getOrNull() else null
+                // While an attempt is under way Android names the access point being tried, so
+                // a failed attempt can be pinned on the access point that turned the phone away.
+                val target = if (state in CONNECTING_STATES) runCatching { wifi.liveTarget() }.getOrNull() else null
                 record(
                     WifiEvent(
                         now(), WifiEventKind.SUPPLICANT, state.name,
-                        ssid = link?.ssid, bssid = link?.bssid,
+                        ssid = target?.ssid, bssid = target?.bssid,
                         // The last signal reading before a disconnect says whether range caused it.
-                        rssiDbm = link?.rssiDbm ?: lastRssi.takeIf { state == SupplicantState.DISCONNECTED },
-                        frequencyMhz = link?.frequencyMhz,
+                        rssiDbm = target?.rssiDbm ?: lastRssi.takeIf { state == SupplicantState.DISCONNECTED },
+                        frequencyMhz = target?.frequencyMhz,
                     ),
                 )
             }
@@ -180,6 +181,12 @@ class WifiEventMonitor(
     }
 
     companion object {
+        /** The states in which Android's Wi-Fi status carries the access point being joined. */
+        private val CONNECTING_STATES = setOf(
+            SupplicantState.AUTHENTICATING, SupplicantState.ASSOCIATING, SupplicantState.ASSOCIATED,
+            SupplicantState.FOUR_WAY_HANDSHAKE, SupplicantState.GROUP_HANDSHAKE, SupplicantState.COMPLETED,
+        )
+
         private const val MAX_EVENTS = 3_000
         private const val SAMPLE_INTERVAL_MS = 5_000L
 

@@ -64,8 +64,8 @@ class ConnectionTesterTest {
         executor.shutdownNow()
     }
 
-    private fun step(state: String, kind: WifiEventKind = WifiEventKind.SUPPLICANT) {
-        monitor.record(WifiEvent(System.currentTimeMillis(), kind, state))
+    private fun step(state: String, kind: WifiEventKind = WifiEventKind.SUPPLICANT, bssid: String? = null) {
+        monitor.record(WifiEvent(System.currentTimeMillis(), kind, state, bssid = bssid))
         Thread.sleep(3)
     }
 
@@ -231,6 +231,35 @@ class ConnectionTesterTest {
         assertEquals(ConnectFailure.REJECTED, report.stoppedBy)
         assertEquals(1, report.results[0].trials.size)
         assertEquals(1, report.results[0].successes)
+    }
+
+    @Test
+    fun `android's stage-less failure is named from the steps seen, and the phone's own tries elsewhere are left out`() {
+        val progress = CopyOnWriteArrayList<ConnectTestProgress>()
+        val seen = HashSet<NetworkCallback>()
+        val run = start(listOf(ap5), trials = 1, progress)
+
+        val request = awaitRequest(seen)
+        // The phone had just begun rejoining its saved network at the other access point.
+        step("ASSOCIATING", bssid = ap24.bssid)
+        step("DISCONNECTED")
+        // Then the requested access point lets it join but the key exchange fails, twice.
+        repeat(2) {
+            step("ASSOCIATING", bssid = ap5.bssid)
+            step("ASSOCIATED", bssid = ap5.bssid)
+            step("FOUR_WAY_HANDSHAKE", bssid = ap5.bssid)
+            step("DISCONNECTED")
+        }
+        // Android gives up and reports a failure with no stage, as a real phone did.
+        shadowOf(wifiManager).triggerLocalConnectionFailure(
+            WifiNetworkSpecifier.Builder().setSsid("Home").build(),
+            WifiManager.STATUS_LOCAL_ONLY_CONNECTION_FAILURE_UNKNOWN,
+        )
+        request.onUnavailable()
+
+        val trial = run.get(30, TimeUnit.SECONDS).single().trials.single()
+        assertEquals(ConnectFailure.AUTHENTICATION, trial.failure)
+        assertEquals(listOf(FailedStage.KEY_EXCHANGE), trial.hiddenFailures)
     }
 
     @Test

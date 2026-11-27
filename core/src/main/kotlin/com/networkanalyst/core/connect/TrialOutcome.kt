@@ -23,7 +23,7 @@ object TrialOutcome {
      * reconnecting to its saved network at that moment, the tail of that unrelated attempt
      * lands in the window; steps seen before any attempt has started here are therefore dropped.
      */
-    fun observedFailures(windowEvents: List<WifiEvent>): List<FailedStage>? {
+    fun observedFailures(windowEvents: List<WifiEvent>, targetBssid: String? = null): List<FailedStage>? {
         val relevant = windowEvents.sortedBy { it.timeMs }
             .filter { it.kind != WifiEventKind.TEST_START && it.kind != WifiEventKind.TEST_END }
         if (relevant.none { it.kind == WifiEventKind.SUPPLICANT || it.kind == WifiEventKind.NETWORK }) return null
@@ -34,10 +34,16 @@ object TrialOutcome {
                 else -> true
             }
         }
-        return ConnectionTimeline.summarize(own).attempts.filter { !it.success }.mapNotNull { it.failedAt }
+        return ConnectionTimeline.summarize(own).attempts
+            .filter { !it.success }
+            // Between two requests the phone may start rejoining its saved network by itself,
+            // and the next request cuts that short. A try known to have been aimed at another
+            // access point is the phone's own doing, not a retry of this request.
+            .filter { targetBssid == null || it.bssid == null || it.bssid.equals(targetBssid, ignoreCase = true) }
+            .mapNotNull { it.failedAt }
     }
 
-    fun success(windowEvents: List<WifiEvent>): Result = Result(null, observedFailures(windowEvents))
+    fun success(windowEvents: List<WifiEvent>, targetBssid: String? = null): Result = Result(null, observedFailures(windowEvents, targetBssid))
 
     /**
      * @param reported the stage Android gave for the failure, when it gave one
@@ -45,6 +51,7 @@ object TrialOutcome {
      * @param approvalExpected Android had to ask the user to allow this request
      * @param stageReporting this version of Android reports a stage for every connection failure
      * @param elapsedMs how long the request lasted, when known
+     * @param targetBssid the access point the request named, to tell its tries from the phone's own
      */
     fun failure(
         reported: ConnectFailure?,
@@ -53,12 +60,15 @@ object TrialOutcome {
         approvalExpected: Boolean,
         stageReporting: Boolean,
         elapsedMs: Long? = null,
+        targetBssid: String? = null,
     ): Result {
-        val observed = observedFailures(windowEvents)
+        val observed = observedFailures(windowEvents, targetBssid)
         // The last failed try is the failure being reported, not a silent retry before it.
         val hidden = observed?.dropLast(1)
         val failure = when {
-            reported != null -> reported
+            // Android sometimes reports a failure without a stage ("unknown"). The steps the
+            // phone was seen taking then say more than Android did.
+            reported != null && (reported != ConnectFailure.UNKNOWN || observed.isNullOrEmpty()) -> reported
             // Also when time ran out while Android was still retrying: the tries seen until
             // then show where it keeps failing, which says more than "timed out".
             !observed.isNullOrEmpty() -> when (observed.last()) {

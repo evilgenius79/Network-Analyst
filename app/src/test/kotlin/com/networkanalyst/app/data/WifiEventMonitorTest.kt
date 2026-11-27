@@ -23,6 +23,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowNetworkInfo
+import org.robolectric.shadows.ShadowWifiInfo
 import java.io.File
 
 /**
@@ -163,5 +164,33 @@ class WifiEventMonitorTest {
         second.clear()
         assertTrue(second.events.value.isEmpty())
         second.stop()
+    }
+
+    @Test
+    fun `an attempt in progress is recorded with the access point being tried`() {
+        val monitor = monitor()
+        val wifiManager = context.getSystemService(WifiManager::class.java)
+        // What Android's Wi-Fi status holds while the phone is joining an access point.
+        val joining = ShadowWifiInfo.newInstance()
+        shadowOf(joining).setBSSID("A4:11:22:33:45:87")
+        // The platform adds the quotes around a network name itself.
+        shadowOf(joining).setSSID("Home")
+        shadowOf(joining).setFrequency(5560)
+        shadowOf(wifiManager).setConnectionInfo(joining)
+        monitor.handle(supplicant(SupplicantState.ASSOCIATING))
+
+        // And once the attempt has ended, when Android clears it again.
+        shadowOf(wifiManager).setConnectionInfo(ShadowWifiInfo.newInstance())
+        monitor.handle(supplicant(SupplicantState.DISCONNECTED))
+
+        val (trying, ended) = monitor.events.value
+        assertEquals("a4:11:22:33:45:87", trying.bssid)
+        assertEquals("Home", trying.ssid)
+        assertEquals(5560, trying.frequencyMhz)
+        assertEquals(null, ended.bssid)
+
+        val failed = ConnectionTimeline.summarize(monitor.events.value).failures.single()
+        assertEquals("a4:11:22:33:45:87", failed.bssid)
+        assertEquals(FailedStage.JOINING, failed.failedAt)
     }
 }

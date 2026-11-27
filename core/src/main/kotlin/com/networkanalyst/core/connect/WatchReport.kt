@@ -51,6 +51,32 @@ object WatchAnalyzer {
             )
         }
 
+        // Which access point the phone was trying each time, on phones that say so.
+        val failedAt = failures.mapNotNull { it.bssid?.lowercase() }
+        if (failedAt.isNotEmpty()) {
+            val joinedAt = attempts.filter { it.success }.mapNotNull { it.bssid?.lowercase() }
+            val units = ApUnits.groupAddresses(failedAt + joinedAt)
+            val rows = units.map { unit -> Triple(ApUnits.label(unit), failedAt.count { it in unit }, joinedAt.count { it in unit }) }
+                .filter { it.second > 0 }.sortedByDescending { it.second }
+            val (topLabel, topFailed, _) = rows.first()
+            val concentrated = topFailed >= 2 && topFailed * 3 >= failedAt.size * 2 && units.size > 1
+            findings += Finding(
+                "watch.where", Category.CONNECTING, if (concentrated) Severity.WARNING else Severity.INFO,
+                if (concentrated) "Most failed attempts were at one access point" else "Where the failed attempts were aimed",
+                rows.joinToString("; ") { (label, failed, joined) -> "$label: $failed failed, $joined connected" } + "." +
+                    (if (failedAt.size < failures.size) " For ${failures.size - failedAt.size} more the access point is not known." else "") +
+                    (if (concentrated) " $topFailed of ${failedAt.size} failures were at $topLabel, so the fault follows that access point rather than the phone's Wi-Fi in general." else ""),
+                if (concentrated) {
+                    listOf(
+                        "Run the connection test above to confirm it, then restart that access point.",
+                        "Unplug that access point for a day and see whether the failures stop.",
+                    )
+                } else {
+                    emptyList()
+                },
+            )
+        }
+
         if (summary.drops.isNotEmpty()) {
             val durations = summary.drops.map { it.connectedForMs.toDouble() }
             val signals = summary.drops.mapNotNull { it.rssiDbm }

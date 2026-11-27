@@ -211,4 +211,61 @@ class ConnectionTestAnalyzerTest {
         assertTrue(fixes.any { it.contains("randomized hardware (MAC) address") && it.contains("forget the network") })
         assertTrue(fixes.any { it.contains("blocked, paused") })
     }
+
+    @Test
+    fun `both radios of one box failing is pinned on the box, not on a band`() {
+        // As measured on a real phone: one mesh unit's two radios give trouble, the other unit is clean.
+        val a24 = TestTarget("Home", "a4:11:22:33:45:86", 2462, -47)
+        val a5 = TestTarget("Home", "a4:11:22:33:45:87", 5560, -68)
+        val b5 = TestTarget("Home", "c0:22:33:44:9a:e7", 5560, -51)
+        val report = ConnectionTestAnalyzer.analyze(
+            listOf(
+                TargetResult(a24, listOf(ConnectTrial(a24.bssid, true, durationMs = 4000, hiddenFailures = listOf(FailedStage.JOINING)), ConnectTrial(a24.bssid, true, durationMs = 4000, hiddenFailures = emptyList()))),
+                TargetResult(b5, List(3) { ConnectTrial(b5.bssid, true, durationMs = 500, hiddenFailures = emptyList()) }),
+                TargetResult(
+                    a5,
+                    listOf(
+                        ConnectTrial(a5.bssid, false, ConnectFailure.ASSOCIATION, durationMs = 20_000, hiddenFailures = List(3) { FailedStage.JOINING }),
+                        ConnectTrial(a5.bssid, true, durationMs = 1600, hiddenFailures = emptyList()),
+                    ),
+                ),
+            ),
+        )
+        assertEquals("The trouble follows one access point.", report.headline)
+        val unit = report.findings.first()
+        assertEquals("connect.unit", unit.id)
+        assertEquals(Severity.CRITICAL, unit.severity)
+        assertTrue(unit.detail.startsWith("Every radio of the access point at a4:11:22:33:45:86/87 gave trouble (2.4 GHz and 5 GHz), while the other access point tested connected cleanly."))
+        assertTrue(unit.fixes.first().contains("addresses starting a4:11:22:33:45"))
+        assertTrue(report.findings.none { it.id == "connect.band" || it.id == "connect.some_aps" })
+    }
+
+    @Test
+    fun `one band failing across two boxes is still a band problem`() {
+        val a24 = TestTarget("Home", "a4:11:22:33:45:86", 2462, -47)
+        val a5 = TestTarget("Home", "a4:11:22:33:45:87", 5560, -68)
+        val b24 = TestTarget("Home", "c0:22:33:44:9a:e6", 2437, -45)
+        val b5 = TestTarget("Home", "c0:22:33:44:9a:e7", 5560, -51)
+        fun good(t: TestTarget) = TargetResult(t, List(2) { ConnectTrial(t.bssid, true, durationMs = 500, hiddenFailures = emptyList()) })
+        fun bad(t: TestTarget) = TargetResult(t, List(2) { ConnectTrial(t.bssid, false, ConnectFailure.ASSOCIATION, durationMs = 9000, hiddenFailures = emptyList()) })
+        val report = ConnectionTestAnalyzer.analyze(listOf(good(a24), bad(a5), good(b24), bad(b5)))
+        assertEquals("Connecting fails on 5 GHz only.", report.headline)
+        // And a box with one bad radio out of two is not blamed as a whole.
+        val mixed = ConnectionTestAnalyzer.analyze(listOf(good(a24), bad(a5), good(b24), good(b5)))
+        assertTrue(mixed.findings.none { it.id == "connect.unit" })
+    }
+
+    @Test
+    fun `silent retries are summed up by the step they stopped at`() {
+        val result = TargetResult(
+            ap5,
+            listOf(
+                ConnectTrial(ap5.bssid, true, durationMs = 900, hiddenFailures = listOf(FailedStage.JOINING, FailedStage.KEY_EXCHANGE, FailedStage.JOINING)),
+                ConnectTrial(ap5.bssid, true, durationMs = 900, hiddenFailures = emptyList()),
+            ),
+        )
+        assertEquals("3 silent retries (2 refused when joining, 1 key exchange failed)", result.hiddenFailureSummary)
+        assertEquals(null, TargetResult(ap5, listOf(ConnectTrial(ap5.bssid, true, durationMs = 900, hiddenFailures = emptyList()))).hiddenFailureSummary)
+        assertEquals(null, TargetResult(ap5, listOf(ConnectTrial(ap5.bssid, true, durationMs = 900, hiddenFailures = null))).hiddenFailureSummary)
+    }
 }

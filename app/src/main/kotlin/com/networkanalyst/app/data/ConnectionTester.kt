@@ -202,7 +202,7 @@ class ConnectionTester(
 
             if (available == true) {
                 // Snapshot before releasing: the disconnect that release causes is not a failure.
-                val result = TrialOutcome.success(monitor.since(startedAt))
+                val result = TrialOutcome.success(monitor.since(startedAt), target.bssid)
                 delay(HOLD_MS)
                 return ConnectTrial(target.bssid, success = true, durationMs = elapsedMs, hiddenFailures = result.hiddenFailures)
             }
@@ -217,6 +217,7 @@ class ConnectionTester(
                 approvalExpected = approvalPending,
                 stageReporting = reportsStage,
                 elapsedMs = elapsedMs,
+                targetBssid = target.bssid,
             )
             return ConnectTrial(target.bssid, success = false, failure = result.failure, durationMs = elapsedMs, hiddenFailures = result.hiddenFailures)
         } finally {

@@ -166,4 +166,25 @@ class WatchReportTest {
         assertTrue(finding.detail.startsWith("An established connection was lost 3 times."))
         assertNull(WatchAnalyzer.recentFinding(events.take(events.size - 6), now))
     }
+
+    @Test
+    fun `failures are counted per access point when the phone names it`() {
+        fun at(ms: Long, state: String, bssid: String?) = WifiEvent(ms, WifiEventKind.SUPPLICANT, state, bssid = bssid)
+        fun refusedBy(ms: Long, bssid: String) = listOf(at(ms, "ASSOCIATING", bssid), at(ms + 900, "DISCONNECTED", null))
+        fun joined(ms: Long, bssid: String) = listOf(at(ms, "ASSOCIATING", bssid), at(ms + 100, "ASSOCIATED", bssid), at(ms + 200, "COMPLETED", bssid), n(ms + 800, "CONNECTED"), at(ms + 60_000, "DISCONNECTED", null))
+        val events = refusedBy(0, "a4:11:22:33:45:87") + refusedBy(5_000, "a4:11:22:33:45:86") + refusedBy(10_000, "a4:11:22:33:45:87") +
+            joined(20_000, "c0:22:33:44:9a:e7") + refusedBy(100_000, "c0:22:33:44:9a:e7") + joined(110_000, "c0:22:33:44:9a:e7")
+        val where = WatchAnalyzer.analyze(events).findings.first { it.id == "watch.where" }
+        assertEquals("Most failed attempts were at one access point", where.title)
+        assertEquals(Severity.WARNING, where.severity)
+        assertTrue(where.detail.startsWith("a4:11:22:33:45:86/87: 3 failed, 0 connected; c0:22:33:44:9a:e7: 1 failed, 2 connected."))
+        assertTrue(where.detail.contains("3 of 4 failures were at a4:11:22:33:45:86/87"))
+
+        // Spread evenly, it is listed without blaming one.
+        val even = WatchAnalyzer.analyze(refusedBy(0, "a4:11:22:33:45:87") + refusedBy(5_000, "c0:22:33:44:9a:e7")).findings.first { it.id == "watch.where" }
+        assertEquals("Where the failed attempts were aimed", even.title)
+        assertEquals(Severity.INFO, even.severity)
+        // A phone that names no access point gets no such finding.
+        assertTrue(WatchAnalyzer.analyze(listOf(s(0, "ASSOCIATING"), s(500, "DISCONNECTED"))).findings.none { it.id == "watch.where" })
+    }
 }

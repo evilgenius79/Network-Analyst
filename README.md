@@ -21,10 +21,10 @@ band, and a connection watch records every step the phone's own Wi-Fi takes.
 
 > **Status:** everything here builds, passes its tests and has been checked against real
 > servers, real protocol implementations and Android's own source code (see
-> [docs/VERIFICATION.md](docs/VERIFICATION.md)), but it has **not yet been run on a physical
-> phone**. The screenshots are rendered from sample data. Expect to find device-specific rough
-> edges on first use, above all in the connection test, which leans on how each phone maker's
-> Wi-Fi software behaves.
+> [docs/VERIFICATION.md](docs/VERIFICATION.md)). The connection test has been run on two real
+> phones, a Samsung Galaxy A17 5G and a Motorola, and worked from start to finish on both.
+> The other parts have **not yet been confirmed on a physical phone**. The screenshots are
+> rendered from sample data. Expect device-specific rough edges.
 
 ## What it checks
 
@@ -71,12 +71,14 @@ comes and goes. The result shows, per radio:
   may have refused the phone twice first.
 
 From that it works out whether the trouble follows one band, one mesh unit, or everything,
-and says what to try. The result can be shared as text, for example with the router maker's
-support.
+and says what to try. Radios whose addresses sit next to each other are treated as one box,
+so "both radios of the unit in the hall" is recognised as such. Running the same test on a
+second phone from the same spot tells a faulty unit from a phone that one unit does not get
+on with. The result can be shared as text, for example with the router maker's support.
 
 **Connection watch.** While the app is open it logs every step the phone's own Wi-Fi takes:
-each attempt to join, where a failed one stopped, each drop and the signal strength just
-before it. Switch on *Keep watching in the background* and it goes on recording with the app
+each attempt to join, which access point it was aimed at, where a failed one stopped, each
+drop and the signal strength just before it. Switch on *Keep watching in the background* and it goes on recording with the app
 closed (a notification shows while it does). After the next "Connection failed", the log says
 at which step it failed. If the watch has seen repeated failures in the last 24 hours, the
 full scan report mentions it too.

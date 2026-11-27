@@ -81,6 +81,17 @@ data class TargetResult(val target: TestTarget, val trials: List<ConnectTrial>) 
     val hiddenFailureCount: Int? get() = if (trials.any { it.hiddenFailures == null }) null else trials.sumOf { it.hiddenFailures!!.size }
     val medianConnectMs: Double? get() = Stats.median(trials.filter { it.success }.map { it.durationMs.toDouble() })
 
+    /** Where the silent retries stopped, most frequent first. Empty when there were none or they are hidden. */
+    val hiddenFailureStages: List<Pair<FailedStage, Int>>
+        get() = trials.flatMap { it.hiddenFailures.orEmpty() }.groupingBy { it }.eachCount().toList().sortedByDescending { it.second }
+
+    /** "5 silent retries (4 refused when joining, 1 key exchange failed)", or null when there were none to report. */
+    val hiddenFailureSummary: String?
+        get() {
+            val count = hiddenFailureCount?.takeIf { it > 0 } ?: return null
+            return "$count silent retr${if (count == 1) "y" else "ies"} (" + hiddenFailureStages.joinToString(", ") { "${it.second} ${it.first.brief}" } + ")"
+        }
+
     /** Connected every time without a single silent retry (as far as can be seen). */
     val clean: Boolean get() = trials.isNotEmpty() && failures == 0 && (hiddenFailureCount ?: 0) == 0
     val dead: Boolean get() = trials.isNotEmpty() && successes == 0
@@ -194,7 +205,28 @@ object ConnectionTestAnalyzer {
             }
             // Requests that all got through, but only after silent retries, are unreliable rather than failing.
             val onlyRetries = troubled.all { it.failures == 0 }
-            if (bandSpecific) {
+            // Radios whose addresses sit next to each other belong to one box.
+            val units = ApUnits.group(tested) { it.target }
+            val badUnit = units.firstOrNull { unit -> unit.size >= 2 && unit.containsAll(troubled) && unit.none { it.clean } }
+            if (badUnit != null) {
+                val unitLabel = ApUnits.label(badUnit.map { it.target.bssid })
+                val goodUnits = units.filter { it !== badUnit }
+                findings += Finding(
+                    "connect.unit", Category.CONNECTING, if (onlyRetries) Severity.WARNING else Severity.CRITICAL,
+                    "The trouble follows one access point",
+                    "Every radio of the access point at $unitLabel gave trouble (${badUnit.joinToString(" and ") { it.target.band.label }}), while " +
+                        (if (goodUnits.size == 1) "the other access point" else "the other ${goodUnits.size} access points") +
+                        " tested connected cleanly. Radios whose addresses differ only in the last digits are normally in the same box. " +
+                        "So the phone fails when it picks that box and works when it picks another, which matches a fault that comes and goes. $which.",
+                    listOf(
+                        "Find the box: stand next to each mesh unit in turn and tap Rescan above; the unit whose radios (addresses starting ${badUnit.first().target.bssid.substringBeforeLast(':')}) read strongest there is the one.",
+                        "Restart that unit, then run this test again.",
+                        "Unplug that unit for a day. If the phone then connects every time, the unit is the cause.",
+                        "Run this test on another phone from the same spot. If the other phone connects cleanly to that unit, the fault is between this phone model and that unit, " +
+                            "which is a firmware matter for the router maker: send them these results.",
+                    ),
+                )
+            } else if (bandSpecific) {
                 val band = badBands.first()
                 findings += Finding(
                     "connect.band", Category.CONNECTING, if (onlyRetries) Severity.WARNING else Severity.CRITICAL,
@@ -276,6 +308,7 @@ object ConnectionTestAnalyzer {
         }
 
         val headline = when {
+            findings.any { it.id == "connect.unit" } -> "The trouble follows one access point."
             findings.any { it.id == "connect.band" } -> findings.first { it.id == "connect.band" }.title + "."
             findings.any { it.id == "connect.some_aps" } -> "The trouble is tied to specific access points."
             else -> "Connecting is unreliable everywhere."

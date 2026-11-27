@@ -3,25 +3,52 @@
 The app was built without access to a phone or an emulator, so each part was checked as far
 as it could be without one. This page says what was checked, how, and what was not.
 
+## Seen on real phones
+
+The owner ran the connection test (version 1.1.0) on two phones from the same spot, against
+a two-unit mesh, and sent the result screens. That is the only part run on hardware so far.
+
+| Phone | What was seen |
+| --- | --- |
+| Samsung Galaxy A17 5G | The app started, Android's approval step was passed and the test ran to the end across three access point radios. Silent retries were counted, so this phone does send the supplicant status broadcast. Two requests failed with "Failed" and no stage: Android's failure report carried its "unknown" code. From 1.2.0 the app names the stage from the steps it saw in that case. |
+| Motorola | The test ran to the end across four radios; all 12 requests connected. |
+
+The two results also confirmed, for that mesh, the assumption behind grouping radios into
+boxes: each unit's 2.4 GHz and 5 GHz radio had addresses one apart, and the two units had
+unrelated prefixes. And they showed the test doing its job: one phone was turned away by both
+radios of one unit while the other phone joined the same radios without trouble.
+
+Not yet seen on a phone: anything added in 1.2.0 (naming the access point of a failed attempt,
+the one-box conclusion on a real result), the connection watch over a longer period, the
+background service, and every other tab.
+
 ## Not verified
 
-- **Nothing has run on a physical Android device.** The Android-specific code (Wi-Fi and
-  connectivity collectors, the ICMP pinger, permission flows, the scan coordinator, the
-  connection tester, the event monitor and the background watch service) compiles against the
-  real Android 17 SDK and passes lint, and the app launches in Robolectric, but its behaviour
-  on real hardware is untested. This is the largest open risk.
+- **Most of the app has not run on a physical Android device.** Apart from what is listed
+  above, the Android-specific code (Wi-Fi and connectivity collectors, the ICMP pinger,
+  permission flows, the scan coordinator, the event monitor's longer-term behaviour and the
+  background watch service) compiles against the real Android 17 SDK and passes lint, and the
+  app launches in Robolectric, but its behaviour on real hardware is untested. This is the
+  largest open risk.
 - **The connection test and connection watch on a real phone.** What Android does with a
   requested connection was read from the source of Android's own Wi-Fi module (see the table
   further down), and the app's side was exercised in a simulated Android in which the test
   plays the part of the system. Phone makers ship their own Wi-Fi software, Samsung included,
   and it may differ from that source. Not known until it runs on a phone:
-  - whether the phone sends the supplicant status broadcast that the detailed steps and the
-    silent-retry count rely on (Android's documentation marks it deprecated; the current
-    source still sends it, and only for the phone's main Wi-Fi interface);
+  - whether a given phone sends the supplicant status broadcast that the detailed steps and
+    the silent-retry count rely on (Android's documentation marks it deprecated; the current
+    source still sends it, and only for the phone's main Wi-Fi interface). The Galaxy A17 5G
+    does; other phones are unknown;
+  - whether a given phone names the access point while an attempt is still in progress, which
+    is what lets a failed attempt be pinned on one access point;
   - what the maker's approval dialog looks like and whether it behaves like the stock one;
   - whether a foreground service really keeps Wi-Fi status updates arriving with the app
     closed on that phone, given its battery management;
   - how quickly Wi-Fi rejoins the saved network after a test.
+- **Which radios share a box.** Radios are grouped when their addresses agree in the first
+  five bytes, lie within eight of each other in the last, and are on different channels. That
+  is how makers usually number them, and it held for the one mesh seen so far, but it is a
+  convention, not a rule.
 - **The 400 ms rule.** A request that ends in under 400 ms with no attempt seen is taken to
   have been refused outright by Android (which it does when the app is not on screen). The
   figure is a judgement: faster than a person can answer a dialog or a scan can complete.
@@ -86,6 +113,7 @@ were read from the Wi-Fi module's source (`WifiNetworkFactory.java`, `WifiConfig
 | The user's approval is remembered per app. For password-protected networks a later request for any access point with the same name and security type skips the dialog; for open networks only the exact access point approved before does. | `isAccessPointApprovedInInternalApprovalList` |
 | The connection is made through a temporary network entry of the app's own, pinned to the requested access point and separate from the phone's saved network of the same name, so the test uses the password typed in and leaves the saved network alone. The entry is removed when the request is released. | `handleConnectToNetworkUserSelectionInternal` (`ephemeral`, `shared = false`, `fromWifiNetworkSpecifier`, `BSSID`), `WifiConfiguration.getProfileKey`, `disconnectAndRemoveNetworkFromWifiConfigManager` |
 | The test connection normally uses a randomized hardware address, whatever the saved network is set to: the request API has no setting for it, the entry is created with the default (automatic), and any setting other than "none" is randomized when the phone has MAC randomization switched on. | `WifiNetworkSpecifier.Builder` (no such setter), `WifiConfiguration.macRandomizationSetting`, and the connect path in `ClientModeImpl` (`configureRandomizedMacAddress` unless `RANDOMIZATION_NONE`) |
+| While an attempt is in progress, Android's Wi-Fi status holds the name, address and channel of the access point being tried, and clears them when the attempt ends. The app reads it at each step, which is how a failed attempt is attributed to an access point. | `ClientModeImpl.handleSupplicantStateChange` |
 | Requesting one band is not implemented, so radios are targeted by address instead. | `TODO(b/188021807)` in `handleConnectToNetworkUserSelectionInternal` |
 | While it waits for approval or looks for the access point, scanning pauses when the screen turns off, so the app keeps the screen on during the test. | `handleScreenStateChanged` |
 | Normal automatic joining is switched back on when the request ends. | `removeClientModeManagerIfNecessary` |

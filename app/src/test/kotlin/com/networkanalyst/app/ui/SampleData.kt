@@ -236,6 +236,27 @@ object SampleData {
 
     val connectResult = connectSetup.copy(report = ConnectionTestAnalyzer.analyze(connectResults))
 
+    /** Both radios of the nearest unit give trouble; the unit down the hall is clean. */
+    val connectOneUnit = connectSetup.copy(
+        report = ConnectionTestAnalyzer.analyze(
+            home.targets.filter { it.bssid.startsWith("a4:11:22:33:44") || it.bssid.startsWith("a4:11:22:33:55") }.map { target ->
+                val b = target.bssid
+                TargetResult(
+                    target,
+                    when (b) {
+                        "a4:11:22:33:44:50" -> listOf(trial(b, 4.3, FailedStage.JOINING), trial(b, 4.0), trial(b, 3.8))
+                        "a4:11:22:33:44:51" -> listOf(
+                            failed(b, ConnectFailure.ASSOCIATION, 19.6, FailedStage.JOINING, FailedStage.JOINING, FailedStage.KEY_EXCHANGE),
+                            trial(b, 1.6),
+                            failed(b, ConnectFailure.ASSOCIATION, 17.2, FailedStage.JOINING, FailedStage.JOINING),
+                        )
+                        else -> listOf(trial(b, 0.5), trial(b, 0.4), trial(b, 0.5))
+                    },
+                )
+            },
+        ),
+    )
+
     val connectAllGood = connectSetup.copy(
         report = ConnectionTestAnalyzer.analyze(connectResults.map { r -> r.copy(trials = List(3) { trial(r.target.bssid, 2.0 + it * 0.2) }) }),
     )

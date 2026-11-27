@@ -20,7 +20,7 @@ class ConnectReportTextTest {
             ),
         )
         assertEquals(
-            "5 GHz ch 36 (aa:bb:cc:00:00:02, -52 dBm): 2/3 connected, typically 4.6 s, 4 silent retries, failed: Refused when joining x1",
+            "5 GHz ch 36 (aa:bb:cc:00:00:02, -52 dBm): 2/3 connected, typically 4.6 s, 4 silent retries (4 refused when joining), failed: Refused when joining x1",
             ConnectReportText.targetLine(result),
         )
         // A phone that hides retries gets no retry count rather than a zero.

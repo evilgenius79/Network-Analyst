@@ -109,4 +109,34 @@ class TrialOutcomeTest {
         val coarse = listOf(n(0, "CONNECTING"), n(9_000, "DISCONNECTED"), n(10_000, "CONNECTING"))
         assertEquals(ConnectFailure.TIMED_OUT, TrialOutcome.failure(null, timedOut = true, coarse, approvalExpected = false, stageReporting = false).failure)
     }
+
+    @Test
+    fun `when android reports a failure without a stage, the steps seen name it`() {
+        val refused = listOf(s(0, "ASSOCIATING"), s(500, "DISCONNECTED"), s(2000, "ASSOCIATING"), s(2500, "DISCONNECTED"))
+        val named = TrialOutcome.failure(ConnectFailure.UNKNOWN, timedOut = false, refused, approvalExpected = false, stageReporting = true)
+        assertEquals(ConnectFailure.ASSOCIATION, named.failure)
+        assertEquals(listOf(FailedStage.JOINING), named.hiddenFailures)
+        // With nothing seen, Android's "failed, stage unknown" stands: it is not a decline or a not-found.
+        assertEquals(ConnectFailure.UNKNOWN, TrialOutcome.failure(ConnectFailure.UNKNOWN, false, emptyList(), approvalExpected = true, stageReporting = true, elapsedMs = 50).failure)
+        // A stage Android did give is never overruled by what was seen.
+        assertEquals(ConnectFailure.IP_ADDRESS, TrialOutcome.failure(ConnectFailure.IP_ADDRESS, false, refused, approvalExpected = false, stageReporting = true).failure)
+    }
+
+    @Test
+    fun `tries the phone made at another access point are not counted against this one`() {
+        val target = "a4:11:22:33:45:87"
+        fun at(ms: Long, state: String, bssid: String?) = WifiEvent(ms, WifiEventKind.SUPPLICANT, state, bssid = bssid)
+        // The phone began rejoining its saved network at another access point; the request cut that short.
+        val events = listOf(
+            at(0, "ASSOCIATING", "c0:22:33:44:9a:e7"), at(80, "DISCONNECTED", null),
+            at(300, "ASSOCIATING", target), at(900, "DISCONNECTED", null),
+            at(1500, "ASSOCIATING", target), at(1600, "ASSOCIATED", target), at(1700, "FOUR_WAY_HANDSHAKE", target), at(1800, "COMPLETED", target),
+        )
+        assertEquals(listOf(FailedStage.JOINING), TrialOutcome.success(events, target).hiddenFailures)
+        // Without knowing the target, or on a phone that names no access point, every try counts.
+        assertEquals(2, TrialOutcome.success(events).hiddenFailures!!.size)
+        assertEquals(2, TrialOutcome.success(events.map { it.copy(bssid = null) }, target).hiddenFailures!!.size)
+        // Capital letters in an address make no difference.
+        assertEquals(1, TrialOutcome.success(events, target.uppercase()).hiddenFailures!!.size)
+    }
 }

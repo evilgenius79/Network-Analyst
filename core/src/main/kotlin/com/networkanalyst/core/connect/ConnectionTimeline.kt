@@ -11,7 +11,10 @@ data class ObservedAttempt(
     val failedAt: FailedStage? = null,
     /** Authentication error the system flagged during the attempt, if any. */
     val authError: String? = null,
-    /** Access point it ended up on, known only for successful attempts. */
+    /**
+     * Access point the attempt was aimed at. Known for successful attempts, and for failed
+     * ones on phones that name the access point while they are still trying.
+     */
     val bssid: String? = null,
     /** True for a move between access points while already connected. */
     val roam: Boolean = false,
@@ -67,6 +70,7 @@ object ConnectionTimeline {
         var sawSupplicant = false
         var authError: String? = null
         var lastMs = startMs
+        var bssid: String? = null
     }
 
     /**
@@ -89,11 +93,11 @@ object ConnectionTimeline {
                 Progress.ASSOCIATED, Progress.KEY_EXCHANGE -> FailedStage.KEY_EXCHANGE
                 Progress.KEYS_DONE, Progress.ADDRESS -> FailedStage.IP_ADDRESS
             }
-            attempts += ObservedAttempt(attempt.startMs, atMs, success = false, failedAt = stage, authError = attempt.authError, roam = attempt.roam)
+            attempts += ObservedAttempt(attempt.startMs, atMs, success = false, failedAt = stage, authError = attempt.authError, bssid = attempt.bssid, roam = attempt.roam)
         }
 
         fun succeed(attempt: Open, atMs: Long, bssid: String?) {
-            attempts += ObservedAttempt(attempt.startMs, atMs, success = true, authError = attempt.authError, bssid = bssid, roam = attempt.roam)
+            attempts += ObservedAttempt(attempt.startMs, atMs, success = true, authError = attempt.authError, bssid = bssid ?: attempt.bssid, roam = attempt.roam)
         }
 
         fun markConnected(atMs: Long, bssid: String?) {
@@ -136,20 +140,24 @@ object ConnectionTimeline {
                     val current = open
                     when (state) {
                         in START_STATES -> {
-                            // Starting over after getting further, or after a long silence,
-                            // means the previous try failed without a word.
-                            if (current != null && (current.progress > Progress.STARTED || event.timeMs - current.lastMs > STALE_MS)) {
+                            // Starting over after getting further, after a long silence, or
+                            // at a different access point means the previous try failed
+                            // without a word.
+                            val elsewhere = current?.bssid != null && event.bssid != null && !current.bssid.equals(event.bssid, ignoreCase = true)
+                            if (current != null && (current.progress > Progress.STARTED || event.timeMs - current.lastMs > STALE_MS || elsewhere)) {
                                 fail(current, event.timeMs)
                                 open = null
                             }
                             val attempt = open ?: Open(event.timeMs, roam = connectedSince != null).also { open = it }
                             attempt.sawSupplicant = true
                             attempt.lastMs = event.timeMs
+                            event.bssid?.let { attempt.bssid = it }
                         }
                         in PROGRESS_STATES -> {
                             val attempt = current ?: Open(event.timeMs, roam = connectedSince != null).also { open = it }
                             attempt.sawSupplicant = true
                             attempt.lastMs = event.timeMs
+                            event.bssid?.let { attempt.bssid = it }
                             val reached = when (state) {
                                 "ASSOCIATED" -> Progress.ASSOCIATED
                                 "COMPLETED" -> Progress.KEYS_DONE

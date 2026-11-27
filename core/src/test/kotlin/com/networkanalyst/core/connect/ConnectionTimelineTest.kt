@@ -194,4 +194,38 @@ class ConnectionTimelineTest {
         assertFalse(empty.detailed)
         assertNull(empty.medianConnectMs)
     }
+
+    @Test
+    fun `a failed attempt remembers the access point it was aimed at`() {
+        fun at(ms: Long, state: String, bssid: String?) = WifiEvent(ms, WifiEventKind.SUPPLICANT, state, bssid = bssid)
+        val summary = ConnectionTimeline.summarize(
+            listOf(
+                at(0, "ASSOCIATING", "a4:11:22:33:45:87"), at(900, "DISCONNECTED", null),
+                at(2000, "ASSOCIATING", "a4:11:22:33:45:87"), at(2100, "ASSOCIATED", "a4:11:22:33:45:87"), at(2200, "FOUR_WAY_HANDSHAKE", "a4:11:22:33:45:87"), at(5000, "DISCONNECTED", null),
+                at(6000, "ASSOCIATING", "c0:22:33:44:9a:e7"), at(6100, "ASSOCIATED", "c0:22:33:44:9a:e7"), at(6200, "COMPLETED", "c0:22:33:44:9a:e7"),
+                WifiEvent(6800, WifiEventKind.NETWORK, "CONNECTED"),
+            ),
+        )
+        assertEquals(listOf("a4:11:22:33:45:87", "a4:11:22:33:45:87", "c0:22:33:44:9a:e7"), summary.attempts.map { it.bssid })
+        assertEquals(listOf(false, false, true), summary.attempts.map { it.success })
+        assertEquals(listOf(FailedStage.JOINING, FailedStage.KEY_EXCHANGE), summary.failures.map { it.failedAt })
+    }
+
+    @Test
+    fun `moving on to another access point without a word means the first one failed`() {
+        fun at(ms: Long, state: String, bssid: String?) = WifiEvent(ms, WifiEventKind.SUPPLICANT, state, bssid = bssid)
+        val summary = ConnectionTimeline.summarize(
+            listOf(
+                at(0, "ASSOCIATING", "a4:11:22:33:45:87"),
+                at(1500, "ASSOCIATING", "c0:22:33:44:9a:e7"), at(1600, "ASSOCIATED", "c0:22:33:44:9a:e7"), at(1700, "COMPLETED", "c0:22:33:44:9a:e7"),
+                WifiEvent(2300, WifiEventKind.NETWORK, "CONNECTED"),
+            ),
+        )
+        assertEquals(2, summary.attempts.size)
+        assertEquals("a4:11:22:33:45:87", summary.failures.single().bssid)
+        assertEquals(FailedStage.JOINING, summary.failures.single().failedAt)
+        // The same access point named twice in a row is one try, as before.
+        val same = ConnectionTimeline.summarize(listOf(at(0, "AUTHENTICATING", "a4:11:22:33:45:87"), at(200, "ASSOCIATING", "a4:11:22:33:45:87"), at(900, "DISCONNECTED", null)))
+        assertEquals(1, same.attempts.size)
+    }
 }

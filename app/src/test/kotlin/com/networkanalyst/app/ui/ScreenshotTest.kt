@@ -134,6 +134,13 @@ class ScreenshotTest {
     fun connectResultFirstScreen() = shot("22_connect_result_top", Tab.CONNECT) { Connect(SampleData.connectResult, SampleData.watchBusy, it) }
 
     @Test
+    @Config(qualifiers = TALL)
+    fun connectOneUnit() = shot("24_connect_one_unit", Tab.CONNECT) { Connect(SampleData.connectOneUnit, SampleData.watchQuiet, it) }
+
+    @Test
+    fun connectOneUnitFirstScreen() = shot("25_connect_one_unit_top", Tab.CONNECT) { Connect(SampleData.connectOneUnit, SampleData.watchQuiet, it) }
+
+    @Test
     fun connectWatch() = shot("23_connect_watch", Tab.CONNECT) {
         // No list of access points yet, so the watch is what the screen has to show.
         Connect(ConnectUiState(), SampleData.watchBusy, it)

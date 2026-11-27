@@ -56,6 +56,25 @@ class WifiCollector(context: Context, private val connectivity: ConnectivityColl
         null
     }
 
+    /** What Android says about the access point the phone is on, or is in the middle of joining. */
+    class LiveTarget(val ssid: String?, val bssid: String?, val frequencyMhz: Int?, val rssiDbm: Int?)
+
+    /**
+     * The access point Android currently names in its Wi-Fi status. Unlike [currentLink] this
+     * is also filled in while a connection is still being attempted: Android puts the access
+     * point it is trying there from the first step, and clears it when the attempt ends.
+     */
+    fun liveTarget(): LiveTarget? {
+        val info = liveInfo() ?: return null
+        return LiveTarget(
+            ssid = cleanSsid(info.ssid),
+            bssid = cleanBssid(info.bssid)?.lowercase(),
+            frequencyMhz = info.frequency.takeIf { it > 0 },
+            // -127 is the framework's "no reading" value.
+            rssiDbm = info.rssi.takeIf { it > -127 && it < 0 },
+        )
+    }
+
     /** Current link, or null when the phone is not associated to an access point. */
     fun currentLink(scan: List<AccessPoint> = emptyList(), rssiSamples: List<Int> = emptyList()): WifiLink? {
         if (connectivity.wifiNetwork() == null) return null

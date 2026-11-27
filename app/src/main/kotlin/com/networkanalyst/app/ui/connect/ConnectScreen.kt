@@ -439,10 +439,10 @@ private fun StatusIcon(icon: ImageVector, tint: Color, description: String) {
     Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.padding(top = 2.dp).size(22.dp))
 }
 
-/** "typically 1.8 s · 2 silent retries · Refused when joining ×1" */
+/** "typically 1.8 s to connect · 2 silent retries (2 refused when joining) · Refused when joining ×1" */
 internal fun resultDetails(result: TargetResult): String = listOfNotNull(
     result.medianConnectMs?.let { "typically ${String.format(Locale.US, "%.1f", it / 1000)} s to connect" },
-    result.hiddenFailureCount?.takeIf { it > 0 }?.let { "$it silent retr${if (it == 1) "y" else "ies"}" },
+    result.hiddenFailureSummary,
     result.failureReasons.takeIf { it.isNotEmpty() }?.joinToString(", ") { "${it.first.label} ×${it.second}" },
 ).joinToString("  ·  ")
 

@@ -8,7 +8,11 @@ object ConnectReportText {
         val parts = ArrayList<String>()
         parts += "${result.successes}/${result.trials.size} connected"
         result.medianConnectMs?.let { parts += "typically ${String.format(Locale.US, "%.1f", it / 1000)} s" }
-        result.hiddenFailureCount?.let { parts += "$it silent retr${if (it == 1) "y" else "ies"}" }
+        when (val count = result.hiddenFailureCount) {
+            null -> Unit
+            0 -> parts += "0 silent retries"
+            else -> parts += result.hiddenFailureSummary!!
+        }
         if (result.failureReasons.isNotEmpty()) {
             parts += "failed: " + result.failureReasons.joinToString(", ") { "${it.first.label} x${it.second}" }
         }

@@ -48,21 +48,25 @@ data class WifiEvent(
  * the access point accepts the phone (association), both sides derive encryption keys from the
  * password (key exchange), and the phone is given an IP address.
  */
-enum class FailedStage(val label: String, val explanation: String) {
+enum class FailedStage(val label: String, val explanation: String, /** A few words, for lists. */ val brief: String) {
     JOINING(
         "Joining the access point",
         "The access point did not accept the phone. It was out of reach, busy, at its device limit, or deliberately ignoring the phone to push it to another access point or band.",
+        "refused when joining",
     ),
     KEY_EXCHANGE(
         "Exchanging encryption keys",
         "The access point accepted the phone but the two could not agree on encryption keys. That points to the password or security settings, or to a signal too weak for the exchange to complete.",
+        "key exchange failed",
     ),
     IP_ADDRESS(
         "Getting an IP address",
         "The phone joined the Wi-Fi network but was not given an IP address. That is the router's address service (DHCP) not answering or having no addresses left.",
+        "no IP address",
     ),
     BEFORE_IP_ADDRESS(
         "Joining or exchanging keys",
         "The attempt failed before the phone asked for an IP address. This phone does not report whether it was the access point refusing the phone or the key exchange failing.",
+        "failed before the IP address step",
     ),
 }
